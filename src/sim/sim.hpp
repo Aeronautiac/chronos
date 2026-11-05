@@ -1,7 +1,7 @@
 #pragma once
-#include "pod.hpp"
-#include "slotmap.hpp"
-#include <cstddef>
+#include "systems/physics.hpp"
+#include "util/slotmap.hpp"
+#include "util/vec2.hpp"
 #include <cstdint>
 #include <expected>
 #include <variant>
@@ -16,11 +16,6 @@ namespace sim {
 /*/
 
 //====== COMPONENTS ======//
-
-struct Vec2 {
-  float x;
-  float y;
-};
 
 struct Physics {
   // cache (re-evaluated every tick)
@@ -89,20 +84,12 @@ using SimInput = std::variant<SpawnEntity, SetMovementIntents, LookAt>;
 using SimOutput = std::variant<std::monostate, EntityID>;
 using SimResult = std::expected<SimOutput, SimErr>;
 
-// dangling modifiers are pruned on next sweep
-template <Pod T> struct PhysModifier {
-  T modifier;
-  EntityID target;
-};
-
-template <uint32_t N_ENTITY> struct PhysicsModifiers {};
-
 // for now, flat data. potentially allow unbounded growth in the future, but
 // isn't yet necessary.
 template <uint32_t N_ENTITY> struct World {
   TimeInt t_excess;
   SlotMap<Entity, N_ENTITY> entities;
-  PhysicsModifiers<N_ENTITY> physics_modifiers;
+  std::array<PhysicsModifier, N_ENTITY * 8> physics_modifiers;
 };
 
 // should always allocate this struct on the heap.
