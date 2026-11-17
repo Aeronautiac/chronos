@@ -23,7 +23,13 @@ target_compile_options(small_game_core INTERFACE -fno-exceptions -fno-rtti)
 
 #====== SIM ======#
 
-add_library(sim STATIC src/sim/sim.cpp)
+# Every .cpp under src except main.cpp, which belongs to the game executable.
+# CONFIGURE_DEPENDS re-checks the glob on each build, so new files are picked
+# up without re-running cmake by hand.
+file(GLOB_RECURSE SIM_SOURCES CONFIGURE_DEPENDS src/*.cpp)
+list(REMOVE_ITEM SIM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+
+add_library(sim STATIC ${SIM_SOURCES})
 target_include_directories(sim PUBLIC src)
 target_link_libraries(sim PRIVATE small_game_warnings small_game_core)
 # PUBLIC so sim headers instantiated in other targets get the same

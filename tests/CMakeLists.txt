@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
-add_executable(sim_tests slotmap_test.cpp)
+add_executable(sim_tests slotmap_test.cpp arena_test.cpp physics_test.cpp
+  movement_test.cpp fsm_test.cpp world_test.cpp)
 target_link_libraries(sim_tests PRIVATE sim small_game_warnings GTest::gtest_main)
 gtest_discover_tests(sim_tests)

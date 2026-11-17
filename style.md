@@ -11,17 +11,16 @@ C's data model, Rust's discipline, and a small set of modern C++ features to mak
 
 ```cpp
   template <typename T>
-  concept Pod = std::is_trivially_copyable_v<T>
-             && std::is_trivially_default_constructible_v<T>
-             && std::is_standard_layout_v<T>;
+  concept Plain = std::is_trivially_copyable_v<T>
+               && std::is_implicit_lifetime_v<T>;
 
-  static_assert(Pod<Entity>);
+  static_assert(Plain<Entity>);
 ```
 
-- No default member initializers in core types. Zero-initialize at creation with `T x{}` or `std::make_unique<T>()`.
+- Trivially copyable means copies are a memcpy and destruction is a no-op: no virtuals, no owning members, no manual destructor calls. Implicit-lifetime means arena memory becomes a `T` without placement new. Constructors that only set values (`std::optional`, default member initializers) are fine.
+- Zero-initialize at creation with `T x{}` or `std::make_unique<T>()`.
 - Relationships are indices or generational handles, never pointers, so state can be copied, hashed, snapshotted, and replayed.
 - Hot data is struct-of-arrays. Cold data is array-of-structs.
-- Variants are an `enum class` tag plus an anonymous union of POD members. Switch on the tag with no `default:` so `-Wswitch-enum -Werror` gives Rust-style exhaustiveness.
 
 ## Memory
 
@@ -85,7 +84,7 @@ Rules the compiler enforces don't depend on remembering them.
 
 **Static checks**
 
-- `static_assert(Pod<T>)` on every core type.
+- `static_assert(Plain<T>)` on every core type.
 - `static_assert(sizeof(World) < BUDGET)` for snapshot memory budgets.
 - clang-tidy with modernize and custom checks.
 - `#pragma GCC poison rand time malloc` (and similar) in simulation translation units.
