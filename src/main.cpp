@@ -1,5 +1,6 @@
 #include "sim/sim.hpp"
 #include "sim/systems/combat/combat.hpp"
+#include "sim/timeline.hpp"
 #include "sim/world.hpp"
 #include <algorithm>
 #include <array>
@@ -10,6 +11,7 @@
 #include <iterator>
 #include <memory>
 #include <raylib.h>
+#include <string_view>
 
 static sim::MovementIntents read_intents() {
   sim::MovementIntents intents = 0;
@@ -89,7 +91,7 @@ static void draw_creature(Vec2 pos, const sim::Physics &p,
   DrawRectangleV({pos.x - w / 2, feet - h}, {w, h}, color);
 
   if (m.state.held(MoveState::WallCling)) {
-    const float bar_x = p.wall_dir > 0 ? pos.x + w / 2 - 2 : pos.x - w / 2;
+    const float bar_x = m.last_wall_dir > 0 ? pos.x + w / 2 - 2 : pos.x - w / 2;
     DrawRectangleV({bar_x, feet - h}, {2, h}, BLUE);
   }
 
@@ -106,6 +108,100 @@ static void draw_creature(Vec2 pos, const sim::Physics &p,
     const Vec2 center = pos + cb.slash_dir * (reach * 0.5f);
     DrawRectangleLinesEx(
         {center.x - reach / 2, center.y - reach / 2, reach, reach}, 1, GOLD);
+  }
+}
+
+//====== HOLOGRAM ======//
+
+// The hologram's target is the real-time sim's now plus an offset (world
+// time). The offset starts at HOLO_OFFSET_START, and - and = change it
+// instantly by HOLO_OFFSET_STEP within [HOLO_OFFSET_MIN, HOLO_OFFSET_MAX].
+constexpr sim::TimeInt HOLO_OFFSET_START = 1'000'000'000;
+constexpr sim::TimeInt HOLO_OFFSET_STEP = 100'000'000;
+constexpr sim::TimeInt HOLO_OFFSET_MIN = 100'000'000;
+constexpr sim::TimeInt HOLO_OFFSET_MAX = 10'000'000'000;
+// Its keyframes have to reach back to the real-time sim's now (inputs roll
+// it back there): the most offset there can be, plus one keyframe interval.
+constexpr sim::TimeInt HOLO_KEYFRAME_INTERVAL = 250'000'000;
+constexpr uint32_t HOLO_KEYFRAME_COUNT = 48; // 12 s
+static_assert(HOLO_KEYFRAME_COUNT * HOLO_KEYFRAME_INTERVAL >=
+              HOLO_OFFSET_MAX + HOLO_KEYFRAME_INTERVAL);
+
+// The hologram doesn't sit at its target: it catches up to it. Its lag (how
+// far it is behind the target, world seconds) follows a critically damped
+// spring to 0 (no overshoot). An input rolls it back to the present, so the
+// lag jumps to the whole offset and it fast-forwards along the new future;
+// an offset change moves the target, and it runs or rewinds to it.
+// Stiffness in 1/s^2: 40 settles in about a second.
+constexpr double HOLO_CATCH_UP_STIFFNESS = 40;
+
+struct CatchUp {
+  double lag;
+  double vel;
+};
+
+// One real-time step of the lag's spring toward 0, split into short steps
+// like the camera's.
+static void catch_up(CatchUp &s, double frame_secs) {
+  const double damping = 2 * std::sqrt(HOLO_CATCH_UP_STIFFNESS);
+  constexpr double MAX_STEP = 1.0 / 120;
+  while (frame_secs > 0) {
+    const double dt = std::min(frame_secs, MAX_STEP);
+    s.vel += (-s.lag * HOLO_CATCH_UP_STIFFNESS - s.vel * damping) * dt;
+    s.lag += s.vel * dt;
+    frame_secs -= dt;
+  }
+  // close enough: caught up exactly
+  if (std::abs(s.lag) < 1e-4 && std::abs(s.vel) < 1e-3) {
+    s.lag = 0;
+    s.vel = 0;
+  }
+}
+
+// Hologram colors, with alpha scaled by the flicker.
+static Color holo(unsigned char r, unsigned char g, unsigned char b,
+                  float alpha) {
+  return Color{r, g, b,
+               static_cast<unsigned char>(std::clamp(alpha, 0.0f, 255.0f))};
+}
+
+// The hologram's look for one box: additive cyan, scanlines scrolling up,
+// a flickering outline, and now and then a small sideways glitch. Drawn
+// inside BLEND_ADDITIVE. `t` is real time in seconds.
+static void draw_hologram_box(Rectangle r, float t) {
+  const float flicker = 0.8f + 0.2f * std::sin(t * 37.0f);
+  if (GetRandomValue(0, 40) == 0) {
+    r.x += static_cast<float>(GetRandomValue(-2, 2));
+  }
+  DrawRectangleRec(r, holo(40, 200, 255, 35 * flicker));
+  constexpr float SPACING = 3;
+  const float scroll = std::fmod(t * 12.0f, SPACING);
+  for (float y = r.y + SPACING - scroll; y < r.y + r.height; y += SPACING) {
+    DrawLineV({r.x, y}, {r.x + r.width, y}, holo(90, 230, 255, 80 * flicker));
+  }
+  DrawRectangleLinesEx(r, 1, holo(150, 245, 255, 220 * flicker));
+}
+
+// A creature in the hologram: shaped like draw_creature (sliding squashes
+// it), plus its slash's hit box while slashing.
+static void draw_hologram_creature(Vec2 pos, const sim::Physics &p,
+                                   const sim::Movement &m,
+                                   const sim::Combat &cb, float t) {
+  const sim::Collider &c = p.collider;
+  float w = c.w;
+  float h = c.h;
+  if (m.state.held(sim::MoveState::Sliding)) {
+    w = c.w * 1.5f;
+    h = c.h * 0.5f;
+  }
+  const float feet = pos.y + c.h / 2;
+  draw_hologram_box({pos.x - w / 2, feet - h, w, h}, t);
+  if (cb.slash_left > 0) {
+    const float reach = m.params.slash_reach;
+    const Vec2 center = pos + cb.slash_dir * (reach * 0.5f);
+    DrawRectangleLinesEx(
+        {center.x - reach / 2, center.y - reach / 2, reach, reach}, 1,
+        holo(150, 245, 255, 160));
   }
 }
 
@@ -254,6 +350,7 @@ static constexpr ParamField PARAM_FIELDS[] = {
     {"overspeed_damping", &sim::MovementParams::overspeed_damping},
     {"ground_friction", &sim::MovementParams::ground_friction},
     {"air_damping", &sim::MovementParams::air_damping},
+    {"ground_reach", &sim::MovementParams::ground_reach},
     {"jump_speed", &sim::MovementParams::jump_speed},
     {"coyote_time", &sim::MovementParams::coyote_time},
     {"jump_buffer_time", &sim::MovementParams::jump_buffer_time},
@@ -265,8 +362,11 @@ static constexpr ParamField PARAM_FIELDS[] = {
     {"slope_sample", &sim::MovementParams::slope_sample},
     {"slide_jump_x", &sim::MovementParams::slide_jump_x},
     {"slide_jump_y", &sim::MovementParams::slide_jump_y},
+    {"wall_cling_reach", &sim::MovementParams::wall_cling_reach},
     {"wall_friction", &sim::MovementParams::wall_friction},
+    {"wall_jump_reach", &sim::MovementParams::wall_jump_reach},
     {"wall_jump_speed", &sim::MovementParams::wall_jump_speed},
+    {"wall_jump_cone", &sim::MovementParams::wall_jump_cone},
     {"burst_speed", &sim::MovementParams::burst_speed},
     {"burst_charges", &sim::MovementParams::burst_charges},
     {"burst_regen_time", &sim::MovementParams::burst_regen_time},
@@ -397,33 +497,126 @@ static void draw_params(const ParamEditor &ed,
   DrawText("backspace: reset selected to default", x0 + 8, foot + 16, 14, GRAY);
 }
 
-int main() {
+int main(int argc, char **argv) {
   // the sim knows nothing about raylib. main only talks to it through exec()
   // and reads world state back for drawing.
-  auto game = std::make_unique<sim::Sim>();
-  sim::fill_test_level(game->world.grid);
-  sim::SimResult spawned = game->exec(
-      sim::SpawnEntity{
-          .kind = sim::EntityKind::Creature,
+  //
+  // Two copies of the same sim, each with an input log and keyframes:
+  //   game   real time
+  //   ahead  the hologram, heading for holo_offset of world time ahead
+  // `ahead` starts from a snapshot of `game` and gets every input after
+  // that too: each one rolls it back to the input's time (the present),
+  // where it takes the input, and then it catches up to its target again
+  // (see CatchUp). It shows where everything goes if you keep doing what
+  // you're doing.
+  //
+  // Only real inputs are sent: a frame with nothing new just lets time pass.
+  //
+  // H turns the hologram off completely (no simulating at all) and back on
+  // (a fresh one from the present). --no-hologram starts with it off.
+  auto game = std::make_unique<sim::Timeline>();
+  std::unique_ptr<sim::Timeline> ahead;
+  // `ahead` keeps its own clock, from 0 when it started: game time `holo_base`
+  sim::TimeInt holo_base = 0;
+  sim::TimeInt holo_offset = HOLO_OFFSET_START;
+  CatchUp catch_up_state{};
+  // how long moving the hologram took this frame, for the HUD
+  double holo_ms = 0;
+  auto timed = [&](auto &&f) {
+    const auto start = std::chrono::steady_clock::now();
+    f();
+    holo_ms += std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - start)
+                   .count();
+  };
+  // the hologram's position in game time, and where it's heading
+  auto holo_time = [&] { return holo_base + ahead->now(); };
+  auto holo_goal = [&] { return game->now() + holo_offset; };
+  // moves the hologram to game time `t`: running on, or rolling back (its
+  // log is kept, so nothing is lost)
+  auto move_hologram_to = [&](sim::TimeInt t) {
+    const sim::TimeInt now = holo_time();
+    if (t > now) {
+      ahead->advance(t - now);
+    } else if (t < now) {
+      const auto back = ahead->rollback_to(t - holo_base);
+      assert(back);
+      (void)back;
+    }
+  };
+  // a fresh hologram from the present, catching up to its target
+  auto start_hologram = [&] {
+    ahead = std::make_unique<sim::Timeline>(
+        sim::TimelineConfig{
+            .keyframe_interval = HOLO_KEYFRAME_INTERVAL,
+            .keyframe_count = HOLO_KEYFRAME_COUNT,
+        },
+        game->sim().save());
+    holo_base = game->now();
+    catch_up_state = {
+        .lag = static_cast<double>(holo_offset) / 1e9,
+        .vel = 0,
+    };
+  };
+
+  auto exec = [&](sim::SimInput input, sim::TimeInt dt) {
+    const sim::TimeInt at = game->now();
+    const sim::SimResult res = game->exec(input, dt);
+    if (ahead) {
+      timed([&] {
+        // back to the input's time, take it there, and catch up again
+        move_hologram_to(at);
+        const auto inserted = ahead->insert(input, at - holo_base);
+        assert(inserted);
+        (void)inserted;
+      });
+      catch_up_state = {
+          .lag = static_cast<double>(holo_goal() - holo_time()) / 1e9,
+          .vel = 0,
+      };
+    }
+    return res;
+  };
+  auto advance = [&](sim::TimeInt dt) { game->advance(dt); };
+
+  // the map: static, owned here, the sim only points at it
+  auto map = std::make_unique<sim::Grid>();
+  sim::fill_test_level(*map);
+  sim::SimResult map_set = exec(sim::SetMap{.map = map.get()}, 0);
+  assert(map_set);
+  sim::SimResult spawned = exec(
+      sim::SpawnCreature{
           // middle of the test level's flat stretch, a little above it
           .pos = {(sim::FLAT_X0 + sim::FLAT_X1) / 2 * sim::Grid::CELL_SIZE,
                   (sim::TEST_LEVEL_GROUND - 10) * sim::Grid::CELL_SIZE}},
       0);
   assert(spawned);
-  sim::EntityID player = std::get<sim::EntityID>(*spawned);
+  // the hologram starts from a snapshot of `game`, so ids match in both
+  const entt::entity player = std::get<entt::entity>(*spawned);
+  // read-only from here on: all changes go through exec()
+  const entt::registry &reg = game->sim().world().reg;
 
   // a dummy to hook and slash: a creature nobody controls, out on the flat
   // stretch to the right of the arena wall. R brings it back.
   constexpr Vec2 DUMMY_POS{1600 * sim::Grid::CELL_SIZE,
                            (sim::TEST_LEVEL_GROUND - 3) * sim::Grid::CELL_SIZE};
   auto spawn_dummy = [&] {
-    sim::SimResult res = game->exec(
-        sim::SpawnEntity{.kind = sim::EntityKind::Creature, .pos = DUMMY_POS},
-        0);
+    sim::SimResult res = exec(sim::SpawnCreature{.pos = DUMMY_POS}, 0);
     assert(res);
-    return std::get<sim::EntityID>(*res);
+    return std::get<entt::entity>(*res);
   };
-  sim::EntityID dummy = spawn_dummy();
+  entt::entity dummy = spawn_dummy();
+
+  if (!(argc > 1 && std::string_view(argv[1]) == "--no-hologram")) {
+    start_hologram();
+  }
+  // the longest frame in the last second, for spotting hitches (an fps
+  // counter averages them away)
+  double worst_frame_ms = 0;
+  double worst_frame_shown_ms = 0;
+  double worst_frame_window = 0;
+  // the last intents sent (see the input below)
+  sim::MovementIntents sent_intents = 0;
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   InitWindow(1280, 720, "small-game");
@@ -436,7 +629,7 @@ int main() {
   ParamEditor editor{};
 
   // render-side state, none of it in the sim
-  Vec2 player_drawn = sim::transform_of(game->world, player)->pos;
+  Vec2 player_drawn = reg.get<sim::Transform>(player).pos;
   CameraSpring cam{.pos = player_drawn, .vel = {0, 0}};
   Camera2D camera{};
   camera.zoom = ZOOM;
@@ -454,6 +647,13 @@ int main() {
     prev = now;
 
     double dt_secs = (static_cast<double>(dt) / static_cast<double>(1e9));
+    worst_frame_ms = std::max(worst_frame_ms, dt_secs * 1e3);
+    worst_frame_window += dt_secs;
+    if (worst_frame_window >= 1) {
+      worst_frame_shown_ms = worst_frame_ms;
+      worst_frame_ms = 0;
+      worst_frame_window = 0;
+    }
     // time scale: [ slower, ] faster
     if (IsKeyDown(KEY_LEFT_BRACKET)) {
       time_factor -= std::max(0.0, time_factor * dt_secs * change_factor);
@@ -465,44 +665,78 @@ int main() {
     // Real time to world time: the player perceives `perception` seconds per
     // world second, so this frame is 1 / perception as much world time.
     // [ and ] scale it further, for debugging.
-    const double perception =
-        game->world.creatures
-            .perception[*sim::creature_row(game->world, player)]
-            .value;
+    const double perception = reg.get<sim::Perception>(player).value;
     sim::TimeInt sim_dt = static_cast<sim::TimeInt>(static_cast<double>(dt) *
                                                     time_factor / perception);
 
-    if (IsKeyPressed(KEY_R) && !sim::creature_row(game->world, dummy)) {
+    if (IsKeyPressed(KEY_R) && !reg.valid(dummy)) {
       dummy = spawn_dummy();
+    }
+    holo_ms = 0;
+    if (IsKeyPressed(KEY_H)) {
+      if (ahead) {
+        ahead.reset();
+      } else {
+        start_hologram();
+      }
+    }
+    // The offset changes at once; the hologram doesn't jump with it: its
+    // lag takes the change, and it catches up to the new target.
+    if (IsKeyPressed(KEY_EQUAL) && holo_offset < HOLO_OFFSET_MAX) {
+      holo_offset += HOLO_OFFSET_STEP;
+      catch_up_state.lag += static_cast<double>(HOLO_OFFSET_STEP) / 1e9;
+    }
+    if (IsKeyPressed(KEY_MINUS) && holo_offset > HOLO_OFFSET_MIN) {
+      holo_offset -= HOLO_OFFSET_STEP;
+      catch_up_state.lag -= static_cast<double>(HOLO_OFFSET_STEP) / 1e9;
     }
 
     // param edits go in as an input like everything else (no time passes)
-    sim::MovementParams params =
-        game->world.creatures.movement[*sim::creature_row(game->world, player)]
-            .params;
+    sim::MovementParams params = reg.get<sim::Movement>(player).params;
     if (edit_params(editor, params)) {
-      sim::SimResult set = game->exec(
-          sim::SetMovementParams{.params = params, .target = player}, 0);
+      sim::SimResult set =
+          exec(sim::SetMovementParams{.params = params, .target = player}, 0);
       assert(set);
     }
 
-    // aim through last frame's camera, from where the player was drawn
-    sim::SimResult res = game->exec(
-        sim::SetMovementIntents{.intents = read_intents(),
-                                .aim = read_aim(camera, player_drawn),
-                                .target = player},
-        sim_dt);
-    assert(res);
+    // Movement input only when the intents change: every input rolls the
+    // hologram back to the present. Aim goes along with it, aimed through last frame's
+    // camera from where the player was drawn. The sim only reads aim on a
+    // press (hook, burst, slash, wall jump), and a press is an intent
+    // change, so aim still arrives exactly when it's used.
+    const sim::MovementIntents intents = read_intents();
+    if (intents != sent_intents) {
+      sim::SimResult res =
+          exec(sim::SetMovementIntents{.intents = intents,
+                                       .aim = read_aim(camera, player_drawn),
+                                       .target = player},
+               sim_dt);
+      assert(res);
+      sent_intents = intents;
+    } else {
+      advance(sim_dt);
+    }
+
+    // The hologram keeps pace with its target and closes its lag on the
+    // spring: it goes to the target minus whatever lag is left.
+    if (ahead) {
+      catch_up(catch_up_state, dt_secs);
+      const auto lag = static_cast<sim::TimeInt>(
+          std::llround(catch_up_state.lag * 1e9));
+      // never behind the present, never past the furthest offset
+      const sim::TimeInt t = std::clamp(holo_goal() - lag, game->now(),
+                                        game->now() + HOLO_OFFSET_MAX);
+      timed([&] { move_hologram_to(t); });
+    }
 
     // sim time since the last tick, to draw ahead by
     const float ahead_secs =
-        static_cast<float>(static_cast<double>(game->world.t_excess) / 1e9);
+        static_cast<float>(static_cast<double>(game->sim().world().t_excess) /
+                           1e9);
 
-    const uint32_t player_row = *sim::creature_row(game->world, player);
-    const sim::CreatureTable &creatures = game->world.creatures;
-    const sim::Physics &player_physics = creatures.physics[player_row];
-    player_drawn =
-        render_pos(creatures.transform[player_row], player_physics, ahead_secs);
+    const sim::Physics &player_physics = reg.get<sim::Physics>(player);
+    player_drawn = render_pos(reg.get<sim::Transform>(player), player_physics,
+                              ahead_secs);
     push_trail(trail, player_drawn);
 
     follow_camera(cam, player_drawn, static_cast<float>(dt_secs));
@@ -521,38 +755,96 @@ int main() {
     ClearBackground(BLACK);
     BeginMode2D(camera);
     draw_stars(view_min, view_max);
-    draw_grid(game->world.grid, view_min, view_max);
+    draw_grid(*game->sim().world().grid, view_min, view_max);
     draw_trail(trail, player_physics.collider);
     // hooks: a rope from the owner, and the hook itself
-    const sim::HookTable &hooks = game->world.hooks;
-    for (uint32_t i = 0; i < hooks.len; i++) {
-      const Vec2 hook_pos =
-          render_pos(hooks.transform[i], hooks.physics[i], ahead_secs);
-      if (auto owner = sim::creature_row(game->world, hooks.hook[i].owner)) {
-        const Vec2 owner_pos = render_pos(
-            creatures.transform[*owner], creatures.physics[*owner], ahead_secs);
+    auto hooks = reg.view<const sim::Hook, const sim::Owner,
+                          const sim::Transform, const sim::Physics>();
+    for (auto [e, hook, owner, t, p] : hooks.each()) {
+      const Vec2 hook_pos = render_pos(t, p, ahead_secs);
+      const auto *owner_t = reg.try_get<sim::Transform>(owner.entity);
+      const auto *owner_p = reg.try_get<sim::Physics>(owner.entity);
+      if (owner_t && owner_p) {
+        const Vec2 owner_pos = render_pos(*owner_t, *owner_p, ahead_secs);
         DrawLineEx({owner_pos.x, owner_pos.y}, {hook_pos.x, hook_pos.y}, 1,
                    GRAY);
       }
       DrawRectangleV({hook_pos.x - 2, hook_pos.y - 2}, {4, 4}, LIGHTGRAY);
     }
-    for (uint32_t i = 0; i < creatures.len; i++) {
-      draw_creature(
-          render_pos(creatures.transform[i], creatures.physics[i], ahead_secs),
-          creatures.physics[i], creatures.movement[i], creatures.combat[i]);
+    auto creatures = reg.view<const sim::Transform, const sim::Physics,
+                              const sim::Movement, const sim::Combat>();
+    for (auto [e, t, p, m, cb] : creatures.each()) {
+      draw_creature(render_pos(t, p, ahead_secs), p, m, cb);
+    }
+
+    // the hologram on top: everything as it'll be where the hologram is
+    const auto real_t = static_cast<float>(GetTime());
+    Vec2 holo_player{};
+    bool holo_player_alive = false;
+    if (ahead) {
+      const entt::registry &holo_reg = ahead->sim().world().reg;
+      const float holo_ahead_secs = static_cast<float>(
+          static_cast<double>(ahead->sim().world().t_excess) / 1e9);
+      BeginBlendMode(BLEND_ADDITIVE);
+      auto holo_hooks = holo_reg.view<const sim::Hook, const sim::Owner,
+                                      const sim::Transform, const sim::Physics>();
+      for (auto [e, hook, owner, t, p] : holo_hooks.each()) {
+        const Vec2 hook_pos = render_pos(t, p, holo_ahead_secs);
+        const auto *owner_t = holo_reg.try_get<sim::Transform>(owner.entity);
+        const auto *owner_p = holo_reg.try_get<sim::Physics>(owner.entity);
+        if (owner_t && owner_p) {
+          const Vec2 owner_pos = render_pos(*owner_t, *owner_p, holo_ahead_secs);
+          DrawLineEx({owner_pos.x, owner_pos.y}, {hook_pos.x, hook_pos.y}, 1,
+                     holo(90, 230, 255, 140));
+        }
+        draw_hologram_box({hook_pos.x - 2, hook_pos.y - 2, 4, 4}, real_t);
+      }
+      auto holo_creatures =
+          holo_reg.view<const sim::Transform, const sim::Physics,
+                        const sim::Movement, const sim::Combat>();
+      for (auto [e, t, p, m, cb] : holo_creatures.each()) {
+        const Vec2 pos = render_pos(t, p, holo_ahead_secs);
+        draw_hologram_creature(pos, p, m, cb, real_t);
+        if (e == player) {
+          holo_player = {pos.x, pos.y - p.collider.h / 2};
+          holo_player_alive = true;
+        }
+      }
+      EndBlendMode();
     }
     EndMode2D();
+
+    // how far ahead it actually is right now (it catches up to the offset)
+    const double holo_ahead =
+        ahead ? static_cast<double>(holo_time() - game->now()) / 1e9 : 0;
+    if (holo_player_alive) {
+      const Vector2 tag =
+          GetWorldToScreen2D({holo_player.x, holo_player.y - 6}, camera);
+      const char *label = TextFormat("+%.2fs", holo_ahead);
+      DrawText(label, static_cast<int>(tag.x) - MeasureText(label, 16) / 2,
+               static_cast<int>(tag.y) - 16, 16, holo(150, 245, 255, 230));
+    }
     DrawFPS(10, 10);
+    DrawText(TextFormat("worst frame %.1f ms", worst_frame_shown_ms), 110, 10,
+             20, worst_frame_shown_ms > 20 ? RED : LIME);
     DrawText(TextFormat("%.2fx time  perception %.2f  tick %.0f us",
                         time_factor, perception,
-                        static_cast<double>(game->tick_dur()) / 1e3),
+                        static_cast<double>(game->sim().tick_dur()) / 1e3),
              10, 34, 20, LIME);
-    const sim::Movement &player_movement =
-        game->world.creatures.movement[*sim::creature_row(game->world, player)];
-    DrawText(TextFormat("gas: %d", player_movement.burst_charges), 10, 80, 20,
-             SKYBLUE);
-    if (!sim::creature_row(game->world, dummy)) {
-      DrawText("R: respawn dummy", 10, 104, 20, GRAY);
+    const sim::Movement &player_movement = reg.get<sim::Movement>(player);
+    DrawText(TextFormat("gas: %d", reg.get<sim::Odm>(player).burst_charges),
+             10, 80, 20, SKYBLUE);
+    if (ahead) {
+      DrawText(TextFormat("hologram (H): +%.2fs of +%.2fs (-/=), %.2f ms "
+                          "this frame",
+                          holo_ahead, static_cast<double>(holo_offset) / 1e9,
+                          holo_ms),
+               10, 104, 20, holo(150, 245, 255, 230));
+    } else {
+      DrawText("hologram off (H): not simulated", 10, 104, 20, GRAY);
+    }
+    if (!reg.valid(dummy)) {
+      DrawText("R: respawn dummy", 10, 128, 20, GRAY);
     }
     draw_params(editor, player_movement.params);
     EndDrawing();

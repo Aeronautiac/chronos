@@ -34,6 +34,10 @@ struct MovementParams {
   float ground_friction = 1500;
   float air_damping = 1;
 
+  // on the ground: a box cast down from the body finds ground within
+  // ground_reach, and it isn't moving up
+  float ground_reach = 2;
+
   // jumping, added upward once
   float jump_speed = 300;
 
@@ -66,15 +70,27 @@ struct MovementParams {
   float slide_jump_x = 260;
   float slide_jump_y = 240;
 
-  // wall cling (in the air, holding toward a wall you're touching): you keep
-  // your vertical speed, but friction against the wall eases it toward 0
-  // (damping, per second). Hit the wall going up and you slide up a way;
-  // falling, the fall is braked. Gravity still wins slowly: the slowest
-  // slide down is about gravity / wall_friction.
+  // Walls are found by box casts sideways from the middle half of the body
+  // (so a ridge down by the feet isn't a wall).
+  //
+  // wall cling (in the air, holding toward a wall within wall_cling_reach):
+  // you keep your vertical speed, but friction against the wall eases it
+  // toward 0 (damping, per second). Hit the wall going up and you slide up
+  // a way; falling, the fall is braked. Gravity still wins slowly: the
+  // slowest slide down is about gravity / wall_friction.
+  float wall_cling_reach = 1;
   float wall_friction = 10;
-  // wall jump (press jump while clinging): adds wall_jump_speed toward the
-  // aim (never into the wall; away and up if there's no aim)
+  // wall jump (press jump in the air with a wall within wall_jump_reach, no
+  // need to cling or hold toward it): adds wall_jump_speed along the aim,
+  // clamped to a cone pointing straight away from the wall, wall_jump_cone
+  // degrees either side. Aim outside it (up the wall, or back into it) and
+  // you go along the cone's nearest edge: the upper one if aiming up, the
+  // lower one if aiming down. So aiming up always pushes off a little, and
+  // holding back toward the wall brings you back to it higher up: wall
+  // jumps climb. Away and up at 45 degrees with no aim.
+  float wall_jump_reach = 8;
   float wall_jump_speed = 550;
+  float wall_jump_cone = 75;
 
   // gas burst (press burst, anywhere): adds burst_speed toward the aim. Up
   // to burst_charges of
@@ -110,8 +126,11 @@ struct MovementParams {
   float slash_damage = 25;
 
   // cooldowns after moves
-  float slide_cooldown = 0.2f;     // after a slide ends
-  float wall_jump_cooldown = 0.1f; // no cling until it's up
+  float slide_cooldown = 0.2f; // after a slide ends
+  // after any jump (ground, slide or wall): no wall jump or cling until it's
+  // up. About as long as a ground jump takes to peak, so a wall jump can't
+  // stack on top of the jump before it while it's still rising.
+  float wall_jump_cooldown = 0.35f;
 
   // time perception (seconds perceived per world second): at least
   // perception_base, and above perception_speed it rises with speed,

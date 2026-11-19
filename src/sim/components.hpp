@@ -1,23 +1,22 @@
 #pragma once
 #include "sim/systems/movement/movement_params.hpp"
 #include "sim/systems/movement/movement_state.hpp"
+#include "util/flags.hpp"
 #include "util/plain.hpp"
-#include "util/slotmap.hpp"
 #include "util/vec2.hpp"
 #include <array>
 #include <cstdint>
+#include <entt/entity/entity.hpp>
 
 namespace sim {
 
-// defined in systems/physics/physics_types.hpp. Key only uses it as a tag.
-struct PhysicsModifier;
-using ModifierID = Key<PhysicsModifier>;
+// Components are plain structs with nothing EnTT-specific. An entity is
+// whatever components it has; systems run views over the ones they need.
+//
+// entt::entity{} is a real id (index 0), so entity fields that can be
+// empty default to entt::null instead.
 
-// defined at the bottom. Key only uses it as a tag.
-struct Entity;
-using EntityID = Key<Entity>;
-
-//====== COMPONENTS ======//
+//====== PHYSICS ======//
 
 enum class PhysicsFlag : uint8_t {
   // collides with solid grid cells
@@ -25,11 +24,14 @@ enum class PhysicsFlag : uint8_t {
   // accelerated by GRAVITY every tick
   Gravity = 1 << 1,
 };
-using PhysicsFlags = uint8_t;
 
-constexpr bool has_flag(PhysicsFlags set, PhysicsFlag f) noexcept {
-  return (set & static_cast<PhysicsFlags>(f)) != 0;
-}
+// What a body touched during the last physics tick. Set by physics.
+enum class Contact : uint8_t {
+  // standing on something
+  Ground = 1 << 0,
+  // any move (floor, wall, ceiling, ridge) was stopped by the grid
+  Collided = 1 << 1,
+};
 
 // Axis-aligned box centered on Transform::pos. Never rotates.
 struct Collider {
@@ -57,25 +59,22 @@ struct Physics {
   float ang_vel;
   float raw_ang_vel;
   Collider collider;
-  PhysicsFlags flags;
   // While on the ground, ledges up to this tall are climbed automatically
   // and drops up to this tall are followed instead of fallen off. 0 = off.
   float step_height;
-  // set by run_physics: standing on something this tick
-  bool on_ground;
-  // set by run_physics: -1 or 1 if a horizontal move was stopped this tick
-  // by a wall (left or right), else 0. Only counts as a wall if it's solid
-  // level with the collider's vertical middle, not a ridge at its feet.
-  float wall_dir;
-  // set by run_physics: any move (floor, wall, ceiling, ridge) was stopped by
-  // the grid this tick
-  bool collided;
+  Flags<PhysicsFlag> flags;
+  // set by physics every tick
+  Flags<Contact> contacts;
 };
+static_assert(Plain<Physics>);
 
 struct Transform {
   Vec2 pos;
   float rot;
 };
+static_assert(Plain<Transform>);
+
+//====== MOVEMENT ======//
 
 enum class MovementIntent : uint8_t {
   Left = 1 << 0,
@@ -92,6 +91,13 @@ enum class MovementIntent : uint8_t {
 };
 using MovementIntents = uint8_t;
 
+enum class MoveFlag : uint8_t {
+  // ctrl was pressed and is still held, and hasn't started a slide yet: the
+  // slide starts the first moment it can (landing, enough speed, cooldown
+  // over)
+  SlideArmed = 1 << 0,
+};
+
 // Input-driven movement. run_movement turns `intents` into changes to
 // Physics::raw_vel every tick.
 struct Movement {
@@ -100,38 +106,60 @@ struct Movement {
   MovementIntents intents;
   // last tick's intents, so presses can be told apart from holds
   MovementIntents prev_intents;
+  Flags<MoveFlag> flags;
   MoveFsm state;
   // unit vector the entity is aiming (gas bursts and the hook go this way),
   // or zero
   Vec2 aim;
-  // this entity's hook while it's out, zeroed key once it's back
-  EntityID hook;
-  // set by the hook system: the hook is stuck and pulling, so movement
-  // doesn't steer against it
-  bool hook_pulling;
   // -1 or 1: last direction walked
   float facing;
-  // gas bursts available, and seconds until the next one regenerates
-  uint8_t burst_charges;
-  float burst_regen_left;
   // input forgiveness, seconds left on each (see MovementParams)
   float coyote_left;
   float jump_buffer_left;
   float wall_grace_left;
-  // which side the wall was on when last clinging, for wall jumps in the
-  // grace window
+  // -1 or 1: which side the wall was on when one was last in wall jump
+  // reach, for wall jumps in the grace window
   float last_wall_dir;
-  // ctrl was pressed and is still held, and hasn't started a slide yet: the
-  // slide starts the first moment it can (landing, enough speed, cooldown
-  // over)
-  bool slide_armed;
   // seconds left on timed states (dodging, cooldowns), indexed by
   // flag_index. 0 means the state isn't timed.
   std::array<float, FsmRules<MoveState>::N> timers;
-  // movement's own Drive modifier. Retuned every tick to whatever movement
-  // is trying to do (walk, stop, slide, slow a wall slide).
-  ModifierID drive;
+  // movement's own drive modifier (an entity with DriveModifier). Retuned
+  // every tick to whatever movement is trying to do (walk, stop, slide,
+  // slow a wall slide).
+  entt::entity drive = entt::null;
 };
+static_assert(Plain<Movement>);
+
+//====== OWNERSHIP ======//
+
+// Belongs to another entity (a hook to the creature that fired it).
+struct Owner {
+  entt::entity entity = entt::null;
+};
+static_assert(Plain<Owner>);
+
+//====== ODM ======//
+
+enum class OdmFlag : uint8_t {
+  // set by the ODM system: the hook is stuck and pulling, so movement
+  // doesn't steer against it
+  HookPulling = 1 << 0,
+};
+
+// The gear: a hook and a gas tank (see systems/odm). Driven by the
+// creature's Movement intents and aim, tuned by its MovementParams.
+struct Odm {
+  // the hook while it's out, null once it's back
+  entt::entity hook = entt::null;
+  // gas bursts available (see burst_regen_left)
+  uint8_t burst_charges;
+  Flags<OdmFlag> flags;
+  // seconds until the next gas burst regenerates
+  float burst_regen_left;
+};
+static_assert(Plain<Odm>);
+
+//====== HOOKS ======//
 
 enum class HookState : uint8_t {
   // on its way out, sticks to the first thing it hits
@@ -142,16 +170,20 @@ enum class HookState : uint8_t {
   Returning,
 };
 
-// A grappling hook out in the world (see systems/hook).
+// A grappling hook out in the world (see systems/odm). A projectile: it
+// also has Owner (the creature whose Odm fired it), Transform and Physics.
 struct Hook {
-  EntityID owner;
   HookState state;
-  // Force modifier on the owner while attached, zeroed key otherwise
-  ModifierID pull;
-  // the creature it's stuck in, or zeroed key if it's stuck in terrain (or
-  // not stuck)
-  EntityID stuck_to;
+  // force modifier (an entity with ForceModifier) on the owner while
+  // attached, null otherwise
+  entt::entity pull = entt::null;
+  // the creature it's stuck in, or null if it's stuck in terrain (or not
+  // stuck)
+  entt::entity stuck_to = entt::null;
 };
+static_assert(Plain<Hook>);
+
+//====== PERCEPTION ======//
 
 // How many seconds this entity perceives per world second (see
 // systems/perception). Rises with speed. The observer's perception is the
@@ -160,6 +192,9 @@ struct Hook {
 struct Perception {
   float value;
 };
+static_assert(Plain<Perception>);
+
+//====== COMBAT ======//
 
 // Fighting: health, and the slash in progress (see systems/combat).
 struct Combat {
@@ -170,27 +205,11 @@ struct Combat {
   // unit vector the current slash points along
   Vec2 slash_dir;
   // who the current slash has already hit, so each is hit once per slash
-  std::array<EntityID, 8> slash_hits;
+  std::array<entt::entity, 8> slash_hits;
   uint8_t slash_hit_count;
   // seconds since this was last hit (counts up), for hit reactions
   float since_hit;
 };
-
-//====== ENTITIES ======//
-
-// Each kind has a fixed set of components and its own table (kinds.hpp).
-enum class EntityKind : uint8_t {
-  // anything living: the player, enemies, NPCs
-  Creature,
-  Hook,
-};
-
-// Where an entity's data lives: row `row` of its kind's table. Every entity
-// of every kind has one of these, and its EntityID is the key to it.
-struct Entity {
-  EntityKind kind;
-  uint32_t row;
-};
-static_assert(Plain<Entity>);
+static_assert(Plain<Combat>);
 
 } // namespace sim

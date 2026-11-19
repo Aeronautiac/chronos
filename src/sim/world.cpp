@@ -1,170 +1,39 @@
 #include "world.hpp"
 #include "systems/combat/combat.hpp"
+#include "systems/movement/movement.hpp"
 
 namespace sim {
 
-std::expected<EntityID, SimErr> spawn_creature(World &world,
-                                               Transform transform) noexcept {
-  CreatureTable &t = world.creatures;
-  if (t.len == CreatureTable::N) {
-    return std::unexpected(SimErr::EntityLimit);
-  }
-  const uint32_t row = t.len;
-  auto id = world.entities.insert(Entity{
-      .kind = EntityKind::Creature,
-      .row = row,
-  });
-  if (!id) {
-    return std::unexpected(SimErr::EntityLimit);
-  }
-  t.len += 1;
-  t.id[row] = *id;
-  t.transform[row] = transform;
-  t.physics[row] = Physics{};
-  t.movement[row] = Movement{};
-  t.combat[row] = Combat{};
-  t.combat[row].health = CREATURE_HEALTH;
+World::World() noexcept { EntityState::reserve(reg, ENTITY_RESERVE); }
+
+entt::entity spawn_creature(World &world, Vec2 pos) noexcept {
+  entt::registry &r = world.reg;
+  const entt::entity e = r.create();
+  r.emplace<Transform>(e, Transform{.pos = pos, .rot = 0});
+
+  Physics p{};
+  p.collider = {.w = 12, .h = 24};
+  // two cells: walks up and down the terrain's staircase slopes
+  p.step_height = 2 * Grid::CELL_SIZE;
+  p.flags.mask = bits({PhysicsFlag::Collides, PhysicsFlag::Gravity});
+  r.emplace<Physics>(e, p);
+
+  Combat cb{};
+  cb.health = CREATURE_HEALTH;
   // long ago, so it doesn't spawn looking freshly hit
-  t.combat[row].since_hit = 1000;
-  t.perception[row] = Perception{.value = 1};
-  return *id;
-}
+  cb.since_hit = 1000;
+  r.emplace<Combat>(e, cb);
 
-std::expected<EntityID, SimErr> spawn_hook(World &world,
-                                           Transform transform) noexcept {
-  HookTable &t = world.hooks;
-  if (t.len == HookTable::N) {
-    return std::unexpected(SimErr::EntityLimit);
-  }
-  const uint32_t row = t.len;
-  auto id = world.entities.insert(Entity{
-      .kind = EntityKind::Hook,
-      .row = row,
-  });
-  if (!id) {
-    return std::unexpected(SimErr::EntityLimit);
-  }
-  t.len += 1;
-  t.id[row] = *id;
-  t.transform[row] = transform;
-  t.physics[row] = Physics{};
-  t.hook[row] = Hook{};
-  return *id;
-}
+  r.emplace<Perception>(e, Perception{.value = 1});
+  add_movement(world.reg, e);
 
-std::expected<void, SimErr> despawn(World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e) {
-    return std::unexpected(SimErr::InvalidEntity);
-  }
-  const uint32_t row = e->row;
-  switch (e->kind) {
-  case EntityKind::Creature: {
-    CreatureTable &t = world.creatures;
-    const uint32_t last = t.len - 1;
-    // move the last row into the gap and repoint its entity
-    if (row != last) {
-      t.id[row] = t.id[last];
-      t.transform[row] = t.transform[last];
-      t.physics[row] = t.physics[last];
-      t.movement[row] = t.movement[last];
-      t.combat[row] = t.combat[last];
-      t.perception[row] = t.perception[last];
-      world.entities.get_mut(t.id[row])->row = row;
-    }
-    t.len = last;
-    break;
-  }
-  case EntityKind::Hook: {
-    HookTable &t = world.hooks;
-    const uint32_t last = t.len - 1;
-    // move the last row into the gap and repoint its entity
-    if (row != last) {
-      t.id[row] = t.id[last];
-      t.transform[row] = t.transform[last];
-      t.physics[row] = t.physics[last];
-      t.hook[row] = t.hook[last];
-      world.entities.get_mut(t.id[row])->row = row;
-    }
-    t.len = last;
-    break;
-  }
-  }
-  // can't fail, `id` was just looked up
-  (void)world.entities.erase(id);
-  return {};
-}
-
-std::optional<uint32_t> creature_row(const World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e || e->kind != EntityKind::Creature) {
-    return std::nullopt;
-  }
-  return e->row;
-}
-
-std::optional<uint32_t> hook_row(const World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e || e->kind != EntityKind::Hook) {
-    return std::nullopt;
-  }
-  return e->row;
-}
-
-Physics *physics_of(World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e) {
-    return nullptr;
-  }
-  switch (e->kind) {
-  case EntityKind::Creature:
-    return &world.creatures.physics[e->row];
-  case EntityKind::Hook:
-    return &world.hooks.physics[e->row];
-  }
-  return nullptr;
-}
-
-const Physics *physics_of(const World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e) {
-    return nullptr;
-  }
-  switch (e->kind) {
-  case EntityKind::Creature:
-    return &world.creatures.physics[e->row];
-  case EntityKind::Hook:
-    return &world.hooks.physics[e->row];
-  }
-  return nullptr;
-}
-
-Transform *transform_of(World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e) {
-    return nullptr;
-  }
-  switch (e->kind) {
-  case EntityKind::Creature:
-    return &world.creatures.transform[e->row];
-  case EntityKind::Hook:
-    return &world.hooks.transform[e->row];
-  }
-  return nullptr;
-}
-
-const Transform *transform_of(const World &world, EntityID id) noexcept {
-  const Entity *e = world.entities.get(id);
-  if (!e) {
-    return nullptr;
-  }
-  switch (e->kind) {
-  case EntityKind::Creature:
-    return &world.creatures.transform[e->row];
-  case EntityKind::Hook:
-    return &world.hooks.transform[e->row];
-  }
-  return nullptr;
+  // full tank
+  const MovementParams &mp = r.get<Movement>(e).params;
+  Odm odm{};
+  odm.burst_charges = static_cast<uint8_t>(mp.burst_charges);
+  odm.burst_regen_left = mp.burst_regen_time;
+  r.emplace<Odm>(e, odm);
+  return e;
 }
 
 } // namespace sim

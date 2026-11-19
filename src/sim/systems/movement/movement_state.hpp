@@ -25,7 +25,7 @@ constexpr FsmRules<MoveState> make_move_rules() {
   r.set(MoveState::Sliding,
         /*blocking*/ {MoveState::SlideCooldown},
         /*cancel*/ {MoveState::Sprinting});
-  // wall jumping needs a cling, so blocking the cling blocks the wall jump
+  // WallJumpCooldown also blocks wall jumps themselves (in movement.cpp)
   r.set(MoveState::WallCling,
         /*blocking*/ {MoveState::Sliding, MoveState::WallJumpCooldown},
         /*cancel*/ {MoveState::Sprinting});

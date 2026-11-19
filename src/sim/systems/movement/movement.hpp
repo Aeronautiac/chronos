@@ -1,9 +1,5 @@
 #pragma once
-#include "sim/entity.hpp"
 #include "sim/sim.hpp"
-#include <cassert>
-#include <expected>
-#include <span>
 
 namespace sim {
 
@@ -13,16 +9,15 @@ constexpr bool has_intent(MovementIntents set, MovementIntent i) noexcept {
   return (set & static_cast<MovementIntents>(i)) != 0;
 }
 
-// Sets up a freshly spawned creature's Movement, including its Drive
-// modifier. On failure nothing is left behind.
-std::expected<void, SimErr> add_movement(World &world, EntityID id) noexcept;
+// Adds Movement to a freshly spawned creature, and its drive modifier (an
+// entity with DriveModifier). Not while iterating a view over Movement or
+// DriveModifier.
+void add_movement(entt::registry &reg, entt::entity e) noexcept;
 
-// Run before physics. Reads on_ground and wall_dir from the previous tick's
-// physics, retunes each entity's drive in `modifiers`, and adds impulses to
-// raw_vel. Index i of every span is the same entity.
-void run_movement(const Grid &grid, PhysicsModifierTable &modifiers,
-                  std::span<Movement> movements, std::span<Physics> bodies,
-                  std::span<const Transform> transforms,
-                  TimeFloat dt) noexcept;
+// Runs over entities with Movement, Physics and Transform. Run after the
+// ODM system (reads this tick's Odm hook_pulling) and before physics.
+// Finds ground and walls itself (box casts), retunes each entity's drive,
+// and adds impulses to raw_vel. Gas bursts are the ODM's.
+void run_movement(World &world, TimeFloat dt) noexcept;
 
 } // namespace sim

@@ -1,23 +1,16 @@
 #include "combat.hpp"
+#include "sim/spatial.hpp"
 #include "sim/systems/movement/movement.hpp"
-#include "sim/world.hpp"
 #include <algorithm>
-#include <cmath>
+#include <cassert>
 
 namespace sim {
 
 namespace {
 
-// Do a box of size `a` at `pa` and a box of size `b` at `pb` (both centered)
-// overlap?
-bool boxes_overlap(Vec2 pa, Collider a, Vec2 pb, Collider b) noexcept {
-  return std::abs(pa.x - pb.x) < (a.w + b.w) * 0.5f &&
-         std::abs(pa.y - pb.y) < (a.h + b.h) * 0.5f;
-}
-
-bool already_hit(const Combat &cb, EntityID id) noexcept {
+bool already_hit(const Combat &cb, entt::entity e) noexcept {
   for (uint8_t k = 0; k < cb.slash_hit_count; k++) {
-    if (cb.slash_hits[k] == id) {
+    if (cb.slash_hits[k] == e) {
       return true;
     }
   }
@@ -27,12 +20,10 @@ bool already_hit(const Combat &cb, EntityID id) noexcept {
 } // namespace
 
 void run_combat(World &world, TimeFloat dt) noexcept {
-  CreatureTable &c = world.creatures;
+  entt::registry &r = world.reg;
 
   // timers, and starting slashes
-  for (uint32_t i = 0; i < c.len; i++) {
-    Combat &cb = c.combat[i];
-    const Movement &m = c.movement[i];
+  for (auto [e, cb, m] : r.view<Combat, const Movement>().each()) {
     const MovementParams &mp = m.params;
     cb.slash_left = std::max(0.0f, cb.slash_left - dt);
     cb.slash_cooldown_left = std::max(0.0f, cb.slash_cooldown_left - dt);
@@ -55,39 +46,43 @@ void run_combat(World &world, TimeFloat dt) noexcept {
   }
 
   // slashes in progress hit whoever they touch, once each
-  for (uint32_t i = 0; i < c.len; i++) {
-    Combat &cb = c.combat[i];
+  auto slashers = r.view<Combat, const Transform, const Movement>();
+  for (auto [e, cb, t, m] : slashers.each()) {
     if (cb.slash_left <= 0) {
       continue;
     }
-    const MovementParams &mp = c.movement[i].params;
-    const Vec2 center =
-        c.transform[i].pos + cb.slash_dir * (mp.slash_reach * 0.5f);
-    const Collider box{.w = mp.slash_reach, .h = mp.slash_reach};
-    for (uint32_t j = 0; j < c.len; j++) {
-      if (j == i || already_hit(cb, c.id[j])) {
-        continue;
-      }
-      if (!boxes_overlap(center, box, c.transform[j].pos,
-                         c.physics[j].collider)) {
-        continue;
+    const MovementParams &mp = m.params;
+    const float half = mp.slash_reach * 0.5f;
+    const Box slash{.center = t.pos + cb.slash_dir * half, .half = {half, half}};
+    for_each_overlapping<Combat>(r, slash, [&](entt::entity other) {
+      if (other == e || already_hit(cb, other)) {
+        return;
       }
       // past the hit list's size, targets can be hit again; plenty for now
       if (cb.slash_hit_count < cb.slash_hits.size()) {
-        cb.slash_hits[cb.slash_hit_count] = c.id[j];
+        cb.slash_hits[cb.slash_hit_count] = other;
         cb.slash_hit_count += 1;
       }
-      c.combat[j].health -= mp.slash_damage;
-      c.combat[j].since_hit = 0;
-    }
+      Combat &other_cb = r.get<Combat>(other);
+      other_cb.health -= mp.slash_damage;
+      other_cb.since_hit = 0;
+    });
   }
 
-  // the dead. Newest row first: despawning moves the last row into the gap,
-  // and that row has already been checked.
-  for (uint32_t r = c.len; r-- > 0;) {
-    if (c.combat[r].health <= 0) {
-      (void)despawn(world, c.id[r]);
+  // the dead, destroyed after the loop (never while iterating a view over
+  // their storages). At most every Combat dies, so `dead` can't fill.
+  ArenaScope scope{world.scratch};
+  auto dead_mem = world.scratch.vec<entt::entity>(
+      static_cast<uint32_t>(r.storage<Combat>().size()));
+  assert(dead_mem);
+  ArenaVec<entt::entity> dead = *dead_mem;
+  for (auto [e, cb] : r.view<const Combat>().each()) {
+    if (cb.health <= 0) {
+      (void)dead.push(e);
     }
+  }
+  for (entt::entity e : dead) {
+    r.destroy(e);
   }
 }
 

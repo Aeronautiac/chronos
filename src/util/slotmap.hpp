@@ -345,4 +345,35 @@ public:
   constexpr T *get_mut(Key<T> key) noexcept {
     return valid_key(key) ? &vals[slots[key.idx()].data_idx] : nullptr;
   }
+
+  // Same state as `other`: every slot's generation and link, the free list,
+  // and the live values in the same dense order. `eq(a, b)` compares two
+  // values, so the caller decides what equal means for T (e.g. T has a
+  // union). Unused slots and dead values are never looked at.
+  template <typename Eq>
+  constexpr bool same(const DenseSlotMap &other, Eq eq) const noexcept {
+    if (len != other.len || head != other.head || tail != other.tail) {
+      return false;
+    }
+    for (uint32_t i = 0; i < tail; i++) {
+      const Slot &a = slots[i];
+      const Slot &b = other.slots[i];
+      if (a.gen != b.gen) {
+        return false;
+      }
+      // odd gen is taken (data_idx is the live member), even is free
+      // (next_free is)
+      const bool link_same = a.gen % 2 == 1 ? a.data_idx == b.data_idx
+                                            : a.next_free == b.next_free;
+      if (!link_same) {
+        return false;
+      }
+    }
+    for (uint32_t i = 0; i < len; i++) {
+      if (owners[i] != other.owners[i] || !eq(vals[i], other.vals[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
 };

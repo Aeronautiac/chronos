@@ -1,17 +1,44 @@
 #pragma once
-#include "sim/entity.hpp"
+#include "sim/components.hpp"
 #include "util/plain.hpp"
 #include "util/vec2.hpp"
 
 namespace sim {
 
-enum PhysicsModifierKind {
-  Velocity,
-  Force,
-  AngularVelocity,
-  AngularForce,
-  Drive,
+// Physics modifiers are entities with one of the modifier components below,
+// each holding the body (`target`) it acts on. The target is in the
+// component itself, so applying a kind is one storage walked in order, plus
+// a lookup of each target's Physics. They last until destroyed, or until
+// their target is gone or has no Physics (physics destroys them then).
+// Several on one body add up.
+
+// Added to the target's vel for every tick it exists, raw_vel untouched.
+struct VelocityModifier {
+  entt::entity target = entt::null;
+  Vec2 vel;
 };
+static_assert(Plain<VelocityModifier>);
+
+// Accumulated into the target's raw_vel, force * dt every tick (unit mass).
+struct ForceModifier {
+  entt::entity target = entt::null;
+  Vec2 force;
+};
+static_assert(Plain<ForceModifier>);
+
+// Added to the target's ang_vel for every tick it exists.
+struct AngularVelocityModifier {
+  entt::entity target = entt::null;
+  float ang_vel;
+};
+static_assert(Plain<AngularVelocityModifier>);
+
+// Accumulated into the target's raw_ang_vel, torque * dt every tick.
+struct AngularForceModifier {
+  entt::entity target = entt::null;
+  float torque;
+};
+static_assert(Plain<AngularForceModifier>);
 
 // Pulls raw_vel toward `target`. Per axis, so a drive can pull on x only (or
 // on x and y with different strengths). An axis with no accel and no damping
@@ -31,21 +58,10 @@ struct DriveParams {
 };
 static_assert(Plain<DriveParams>);
 
-// Persists until erased, or until its target dies (pruned by physics).
-//   Velocity        -> vector_val added to vel this tick, raw_vel untouched
-//   Force           -> vector_val * dt accumulated into raw_vel (unit mass)
-//   AngularVelocity -> scalar_val added to ang_vel this tick
-//   AngularForce    -> scalar_val * dt accumulated into raw_ang_vel
-//   Drive           -> drive pulls raw_vel toward its target
-struct PhysicsModifier {
-  union {
-    Vec2 vector_val;
-    float scalar_val;
-    DriveParams drive;
-  };
-  EntityID target;
-  PhysicsModifierKind kind;
+struct DriveModifier {
+  entt::entity target = entt::null;
+  DriveParams drive;
 };
-static_assert(Plain<PhysicsModifier>);
+static_assert(Plain<DriveModifier>);
 
 } // namespace sim

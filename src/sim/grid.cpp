@@ -1,4 +1,5 @@
 #include "grid.hpp"
+#include "util/det_math.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -36,7 +37,7 @@ void fill_test_level(Grid &grid) noexcept {
     int32_t top = base;
     if (x < FLAT_X0 || x > FLAT_X1) {
       float fx = static_cast<float>(x);
-      float wave = 12.0f * std::sin(fx * 0.02f) + 5.0f * std::sin(fx * 0.07f);
+      float wave = 12.0f * det::sin(fx * 0.02f) + 5.0f * det::sin(fx * 0.07f);
       top = base + static_cast<int32_t>(wave);
     }
     fill_rect(grid, x, top, x, Grid::H - 1, CellKind::Solid);

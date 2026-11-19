@@ -1,33 +1,40 @@
 #include "sim.hpp"
-#include "systems/movement/movement.hpp"
+#include "snapshot.hpp"
 #include "systems/combat/combat.hpp"
-#include "systems/hook/hook.hpp"
-#include "tick.hpp"
+#include "systems/movement/movement.hpp"
+#include "systems/odm/odm.hpp"
+#include "systems/perception/perception.hpp"
+#include "systems/physics/physics.hpp"
 #include "util/overloaded.hpp"
 #include "world.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <expected>
 #include <variant>
 
 namespace sim {
 
-TimeInt Sim::tick_dur() {
+TimeInt Sim::tick_dur() const {
+  const entt::registry &r = world_.reg;
+  // max is the same in any order, so view order doesn't matter here
   float max_speed = 0;
-  float max_perception = 1;
-  const CreatureTable &c = world.creatures;
-  for (uint32_t i = 0; i < c.len; i++) {
-    const Vec2 v = c.physics[i].vel;
-    max_speed = std::max(max_speed, std::sqrt(v.x * v.x + v.y * v.y));
-    max_perception = std::max(max_perception, c.perception[i].value);
+  for (auto [e, p] : r.view<const Physics>().each()) {
+    max_speed = std::max(max_speed, std::sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y));
   }
-  const HookTable &h = world.hooks;
-  for (uint32_t i = 0; i < h.len; i++) {
-    const Vec2 v = h.physics[i].vel;
-    max_speed = std::max(max_speed, std::sqrt(v.x * v.x + v.y * v.y));
+  float max_perception = 1;
+  for (auto [e, pc] : r.view<const Perception>().each()) {
+    max_perception = std::max(max_perception, pc.value);
+  }
+  // still: nothing moving (bodies at rest have exactly zero velocity) and
+  // no one holding anything
+  bool active = max_speed > 0;
+  for (auto [e, m] : r.view<const Movement>().each()) {
+    active = active || m.intents != 0;
   }
 
-  double secs = static_cast<double>(BASE_TICK) / 1e9 / max_perception;
+  const TimeInt base = active ? BASE_TICK : IDLE_TICK;
+  double secs = static_cast<double>(base) / 1e9 / max_perception;
   if (max_speed > 0) {
     secs = std::min(secs, static_cast<double>(TICK_MAX_TRAVEL / max_speed));
   }
@@ -37,52 +44,37 @@ TimeInt Sim::tick_dur() {
 
 // TODO:
 // finish this
-SimResult Sim::apply_input(SimInput input) {
+SimResult Sim::apply(SimInput input) {
   return std::visit(
       overloaded{
-          [this](SpawnEntity spawn_entity) -> SimResult {
-            switch (spawn_entity.kind) {
-            case EntityKind::Creature: {
-              auto id = spawn_creature(
-                  world, Transform{.pos = spawn_entity.pos, .rot = 0});
-              if (!id)
-                return std::unexpected(id.error());
-              Physics &p = *physics_of(world, *id);
-              p.collider = {.w = 12, .h = 24};
-              // two cells: walks up and down the terrain's staircase slopes
-              p.step_height = 2 * Grid::CELL_SIZE;
-              p.flags = static_cast<PhysicsFlags>(PhysicsFlag::Collides) |
-                        static_cast<PhysicsFlags>(PhysicsFlag::Gravity);
-              auto mvmt = add_movement(world, *id);
-              if (!mvmt) {
-                (void)despawn(world, *id);
-                return std::unexpected(mvmt.error());
-              }
-              return *id;
+          [this](SetMap set_map) -> SimResult {
+            if (!set_map.map) {
+              return std::unexpected(SimErr::InvalidMap);
             }
-            case EntityKind::Hook:
-              // hooks are only fired by their owners
-              return std::unexpected(SimErr::InvalidEntity);
-            }
-            // unreachable, every kind returns above
-            return std::unexpected(SimErr::InvalidEntity);
+            world_.grid = set_map.map;
+            return std::monostate{};
+          },
+          [this](SpawnCreature spawn) -> SimResult {
+            return spawn_creature(world_, spawn.pos);
           },
           [this](SetMovementIntents set_mvmt_intent) -> SimResult {
-            auto row = creature_row(world, set_mvmt_intent.target);
-            if (!row)
+            auto *m = world_.reg.try_get<Movement>(set_mvmt_intent.target);
+            if (!m) {
               return std::unexpected(SimErr::InvalidEntity);
-            world.creatures.movement[*row].intents = set_mvmt_intent.intents;
-            world.creatures.movement[*row].aim = set_mvmt_intent.aim;
+            }
+            m->intents = set_mvmt_intent.intents;
+            m->aim = set_mvmt_intent.aim;
             return std::monostate{};
           },
           [](LookAt) -> SimResult {
             return std::unexpected(SimErr::InvalidEntity);
           },
           [this](SetMovementParams set_params) -> SimResult {
-            auto row = creature_row(world, set_params.target);
-            if (!row)
+            auto *m = world_.reg.try_get<Movement>(set_params.target);
+            if (!m) {
               return std::unexpected(SimErr::InvalidEntity);
-            world.creatures.movement[*row].params = set_params.params;
+            }
+            m->params = set_params.params;
             return std::monostate{};
           },
       },
@@ -90,23 +82,17 @@ SimResult Sim::apply_input(SimInput input) {
 }
 
 void Sim::do_tick(TimeFloat dt) {
-  run_hooks(world);
-  run_combat(world, dt);
-  tick_movement(world, dt);
-  tick_physics(world, dt);
-  tick_perception(world, dt);
+  assert(world_.grid && "send SetMap before ticking");
+  run_odm(world_, dt);
+  run_combat(world_, dt);
+  run_movement(world_, dt);
+  run_physics(world_, dt);
+  run_perception(world_.reg, dt);
 }
 
-SimResult Sim::exec(SimInput input, TimeInt dt) {
-  // gate input and apply state mutations, if necessary.
-  // the simulation will behave differently based on these surface level
-  // mutations. immediate ticks are not necessary.
-  SimResult res = apply_input(input);
-  if (!res)
-    return res;
-
-  // advance the simulation as far forward as possible.
-  TimeInt remaining = world.t_excess + dt;
+void Sim::advance(TimeInt dt) {
+  // as many ticks as fit, each as long as tick_dur says at the time
+  TimeInt remaining = world_.t_excess + dt;
   TimeInt step = tick_dur();
   while (remaining >= step) {
     do_tick(static_cast<float>(static_cast<double>(step) /
@@ -114,9 +100,17 @@ SimResult Sim::exec(SimInput input, TimeInt dt) {
     remaining -= step;
     step = tick_dur();
   }
-  world.t_excess = remaining;
+  world_.t_excess = remaining;
+}
 
+SimResult Sim::exec(SimInput input, TimeInt dt) {
+  SimResult res = apply(input);
+  advance(dt);
   return res;
 }
+
+void Sim::restore(const Snapshot &snap) { restore_world(world_, snap); }
+
+Snapshot Sim::save() const { return save_world(world_); }
 
 } // namespace sim

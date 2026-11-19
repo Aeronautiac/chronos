@@ -171,6 +171,48 @@ constexpr bool dense_holds_optional() {
 }
 static_assert(dense_holds_optional());
 
+constexpr bool hp_equal(const Item &a, const Item &b) { return a.hp == b.hp; }
+
+// Same history, same state. Constant evaluation also rejects reading a
+// slot's inactive union member, so this checks `same` only reads live ones.
+constexpr bool dense_same_after_same_history() {
+  DMap a{};
+  DMap b{};
+  for (DMap *m : {&a, &b}) {
+    auto k0 = *m->insert({1});
+    auto k1 = *m->insert({2});
+    (void)m->insert({3});
+    (void)m->erase(k0);
+    (void)m->erase(k1);
+    (void)m->insert({4});
+  }
+  return a.same(b, hp_equal) && b.same(a, hp_equal);
+}
+static_assert(dense_same_after_same_history());
+
+// Same live values in the same order, but different free lists: the next
+// insert would hand out different keys, so the state isn't the same.
+constexpr bool dense_same_sees_free_list() {
+  DMap a{};
+  DMap b{};
+  (void)a.insert({1});
+  auto tmp = *b.insert({0});
+  (void)b.erase(tmp);
+  (void)b.insert({1});
+  return a.size() == b.size() && a.values()[0].hp == b.values()[0].hp &&
+         !a.same(b, hp_equal);
+}
+static_assert(dense_same_sees_free_list());
+
+constexpr bool dense_same_sees_values() {
+  DMap a{};
+  DMap b{};
+  (void)a.insert({1});
+  (void)b.insert({2});
+  return !a.same(b, hp_equal);
+}
+static_assert(dense_same_sees_values());
+
 TEST(DenseSlotMap, InsertUntilFull) {
   DMap m{};
   for (int i = 0; i < 8; i++) {
