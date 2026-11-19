@@ -15,7 +15,7 @@ constexpr bool has_intent(MovementIntents set, MovementIntent i) noexcept {
 void add_movement(entt::registry &reg, entt::entity e) noexcept;
 
 // Runs over entities with Movement, Physics and Transform. Run after the
-// ODM system (reads this tick's Odm hook_pulling) and before physics.
+// ODM system (reads this tick's Odm HookPulling flag) and before physics.
 // Finds ground and walls itself (box casts), retunes each entity's drive,
 // and adds impulses to raw_vel. Gas bursts are the ODM's.
 void run_movement(World &world, TimeFloat dt) noexcept;

@@ -20,7 +20,8 @@ TimeInt Sim::tick_dur() const {
   // max is the same in any order, so view order doesn't matter here
   float max_speed = 0;
   for (auto [e, p] : r.view<const Physics>().each()) {
-    max_speed = std::max(max_speed, std::sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y));
+    max_speed =
+        std::max(max_speed, std::sqrt(p.vel.x * p.vel.x + p.vel.y * p.vel.y));
   }
   float max_perception = 1;
   for (auto [e, pc] : r.view<const Perception>().each()) {
@@ -42,8 +43,7 @@ TimeInt Sim::tick_dur() const {
   return std::max(ns, MIN_TICK);
 }
 
-// TODO:
-// finish this
+// TODO: LookAt isn't implemented yet (always rejected)
 SimResult Sim::apply(SimInput input) {
   return std::visit(
       overloaded{

@@ -25,7 +25,7 @@ target_compile_options(small_game_core INTERFACE -fno-exceptions -fno-rtti)
 #====== SIM ======#
 
 # Header-only ECS. Pinned to an exact commit: exact restore depends on how
-# its snapshots and storages behave (see PORT_TO_ENTT.md), so updating it
+# its snapshots and storages behave (see the README's ECS rules), so updating it
 # means re-checking that.
 FetchContent_Declare(EnTT
   GIT_REPOSITORY https://github.com/skypjack/entt.git

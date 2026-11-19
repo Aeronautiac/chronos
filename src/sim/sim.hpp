@@ -13,11 +13,10 @@
 namespace sim {
 
 /*/
- * Making a basic space shooting game with rollback and time manipulation
- * capabilities at first to test the design.
- * Will later expand into a proper bullet hell, movement dense type of game.
- * Entities live in an EnTT registry; see PORT_TO_ENTT.md for the rules that
- * keep it deterministic and exactly restorable.
+ * The simulation of a 2D movement and time-manipulation action game:
+ * deterministic, exactly restorable and rewindable. Entities live in an
+ * EnTT registry; see the README's design section for the rules that keep
+ * it that way.
 /*/
 
 //========= I/O ==========//
@@ -47,12 +46,13 @@ struct SpawnCreature {
 // returns nothing (monostate)
 struct SetMovementIntents {
   MovementIntents intents;
-  // unit vector the entity aims along (gas bursts), or zero
+  // unit vector the entity aims along (hook, gas bursts, slashes, wall
+  // jumps), or zero
   Vec2 aim;
   entt::entity target;
 };
 
-// returns nothing (monostate)
+// returns nothing (monostate). Not implemented yet: always rejected.
 struct LookAt {
   Vec2 pos;
   entt::entity target;

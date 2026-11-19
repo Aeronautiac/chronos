@@ -90,7 +90,7 @@ struct InArchive {
 // saving, loading, reserving, and comparing. Ts must list every component
 // type the sim uses (check_covered asserts it on save).
 //
-// Exact restore (see PORT_TO_ENTT.md) relies on:
+// Exact restore (see the README's ECS rules) relies on:
 //   - loading only into a freshly constructed registry (load is the only
 //     restore path)
 //   - no in-place deletion storages (asserted below)

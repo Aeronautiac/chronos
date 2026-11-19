@@ -64,8 +64,7 @@ tests/              guarantee and primitive tests
 tools/              cross-platform determinism check
 ```
 
-Related docs: `KNOWN_ISSUES.md` (open problems), `PORT_TO_ENTT.md` (the
-ECS port: its rules and why), `style.md` (code style).
+Related docs: `KNOWN_ISSUES.md` (open problems), `style.md` (code style).
 
 ## Design
 
@@ -87,8 +86,17 @@ reproduces everything. Even switching maps is an input.
 
 ### Time
 
-Ticks are adaptive: `tick_dur()` shortens them so the fastest body moves at
-most `TICK_MAX_TRAVEL` per tick, and so high perception slows the world.
+Ticks are adaptive. `tick_dur()` is worked out again before every tick, from
+the state:
+
+- 240 Hz (`BASE_TICK`) while anything moves or anyone holds an input, 30 Hz
+  (`IDLE_TICK`) while nothing does, so a still world costs little. An input
+  isn't delayed by this: it changes the state at once, so the very next tick
+  is a short one.
+- Shorter still so the fastest body moves at most `TICK_MAX_TRAVEL` per
+  tick, and divided by the highest perception (high perception slows the
+  world).
+
 Time that doesn't fill a tick carries over in `World::t_excess`. Because of
 that carry, splitting an `advance` into pieces runs exactly the same ticks
 as doing it in one go, so inputs can land at any point in time, not just on
@@ -106,15 +114,45 @@ entity with Transform, Physics, Movement, Combat, Perception and Odm; a hook
 is a projectile with Owner, Hook, Transform and Physics; a physics modifier
 is an entity with one modifier component.
 
-Rules that keep this deterministic and exactly restorable (details in
-`PORT_TO_ENTT.md`):
+Rules that keep this deterministic and exactly restorable:
 
-- Every component type is listed in `EntityState` (`sim.hpp`).
-- No groups, no sim state in `registry.ctx()`, no in-place-delete storages.
-- Structural changes (create, destroy, emplace, remove) never touch a
-  storage the current loop iterates. They're queued in a per-tick scratch
-  arena and applied after the loop.
-- Storages are reserved up front, on creation and after every restore.
+- **Every component type is listed in `EntityState`** (`sim.hpp`). A
+  missing one would silently vanish from snapshots; saving asserts none is
+  (debug builds).
+- **No in-place-delete storages.** EnTT snapshots write their holes as null
+  and skip them on load, so a restored storage would come back compacted, in
+  a different order. Plain structs never use in-place delete;
+  `SimState` `static_assert`s it for every listed type.
+- **No sim state in `registry.ctx()`.** Snapshots don't include it. State
+  that isn't per-entity is a plain `World` member.
+- **No groups.** They rearrange storages' order, which is state.
+- **Structural changes are deferred.** Creating, destroying, emplacing or
+  removing never touches a storage the current loop iterates. Changes are
+  queued in `ArenaVec`s from the per-tick scratch arena, sized from the
+  relevant storage's size so they can't fill, and applied after the loop in
+  loop order. (Touching a storage the loop doesn't iterate is allowed, e.g.
+  creating a hook's pull force inside the hook loop.)
+- **Storages are reserved up front**, on creation and after every restore,
+  so ticks don't allocate.
+
+### Parallelism (planned)
+
+Not done yet, but the sim is built for it, under these rules so results
+don't depend on threads:
+
+- Parallel jobs write only their own rows; anything shared is read-only in
+  that phase.
+- Work is split into fixed-size chunks by index, never by thread count or
+  work-stealing order.
+- Reductions are combined in chunk order (min and max are fine in any
+  order; float sums aren't).
+- Structural changes go to per-chunk command buffers, applied on one thread
+  in chunk order.
+- Randomness is seeded per entity or per chunk from ids and the tick, never
+  from a shared generator.
+
+Separate sims (the demo's real-time one and its hologram) share nothing and
+can each have a thread as they are.
 
 ### The map
 
@@ -147,7 +185,8 @@ replace the linear loops later without changing callers.
 (every storage in packed order, the entity storage with every id ever handed
 out and its free list) and loads it only into a freshly constructed
 registry, which reproduces ids, versions, recycling order and storage order
-exactly.
+exactly. A cleared registry wouldn't do: `clear()` keeps destroyed ids with
+bumped versions, so recycled ids would come out different.
 
 `same_state(a, b)` is the replay check: same entity ids, versions and free
 list, and every storage holding the same entities in the same order with
@@ -168,8 +207,30 @@ None of it is sim state, and rollback is not an input.
 - `rollback_to(t)` moves the present back; advancing again replays the
   logged inputs after it.
 - Keyframes are taken at fixed multiples of an interval, each from before
-  the inputs at its own time, in a ring buffer. Inserting invalidates only
-  the keyframes after the inserted input.
+  the inputs at its own time, in a ring buffer. A new input, whether
+  inserted into the past or applied at a present that was rolled back to,
+  invalidates only the keyframes after it.
+- A timeline can start from any snapshot, on its own clock from 0, and
+  carries on exactly like the sim the snapshot came from.
+
+### The demo
+
+`src/main.cpp` (throwaway, raylib) runs the test level with a player and a
+dummy, and shows off rollback with a hologram: a second timeline started
+from a snapshot of the real one, heading for an offset ahead of it. Every
+input rolls the hologram back to the present, where it takes the input,
+and it then catches up to its target on a spring. It shows where everything
+goes if you keep doing what you're doing.
+
+Movement input is only sent when the held keys change, with the aim
+alongside (the sim only reads aim on a press), so frames with nothing new
+just let time pass.
+
+Controls: A/D move, space jump, shift sprint, ctrl slide, Q gas burst,
+right mouse hook, left mouse slash. H turns the hologram on and off (off
+means not simulated at all; `--no-hologram` starts with it off), `-`/`=`
+change its offset, `[`/`]` scale time, R respawns the dummy, F1 opens the
+movement parameter editor.
 
 ### Deterministic floats
 
@@ -206,8 +267,8 @@ multiply-add allowed).
 | Handles never dangle | Generational `entt::entity` ids | `Guarantees.StaleHandlesFindNothing` (a dead creature's id finds nothing even after its slot is reused) |
 | No allocation in a tick | Reserved storages, pre-touched sparse pages, scratch arena for queues | `Guarantees.TicksDontAllocate` counts every `operator new` over a churning workload, on a fresh world and after a restore |
 | State only changes through the input funnel | `Sim` keeps `World` private (a compile error otherwise) | `Guarantees.RejectedInputsOnlyPassTime` (a rejected input equals just letting time pass) |
-| Rollback restores the past exactly | Keyframes + replay; split advances run the same ticks | `Rollback.MatchesThePast` (at an input's time and partway through one), `Rollback.KeepsTheLog` |
-| Inputs inserted into the past adjust the present | Keyframe invalidation + re-simulation | `Rollback.InsertingIntoThePastAdjustsThePresent`, `Rollback.InsertingIntoTheFutureWaitsForIt`, `Rollback.OnlyWithinTheKeptRange` |
+| Rollback restores the past exactly | Keyframes + replay; split advances run the same ticks | `Rollback.MatchesThePast` (at an input's time and partway through one), `Rollback.KeepsTheLog`, `Rollback.StartsFromASnapshot` |
+| Inputs inserted into the past adjust the present | Keyframe invalidation + re-simulation | `Rollback.InsertingIntoThePastAdjustsThePresent`, `Rollback.InputAfterRollbackRedoesLaterKeyframes`, `Rollback.InsertingIntoTheFutureWaitsForIt`, `Rollback.OnlyWithinTheKeptRange` |
 | Same float bits on every platform | `-ffp-contract=off`; `#error` on fast-math; `static_assert(FLT_EVAL_METHOD == 0)`; `det_math` | `DetMath.*` (accuracy, edge values, pinned output bits); `SimDoesntCallLibm` (fails on libm calls in sim/util); `tools/cross_check.sh` |
 
 The tests run on the machine you build on. `tools/cross_check.sh` covers other

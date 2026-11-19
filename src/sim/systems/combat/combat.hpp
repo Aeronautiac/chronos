@@ -14,7 +14,7 @@ inline constexpr float CREATURE_HEALTH = 100;
 // the loops.
 //
 // Run before movement (it reads presses against last tick's intents) and
-// after hooks.
+// after the ODM system.
 void run_combat(World &world, TimeFloat dt) noexcept;
 
 } // namespace sim

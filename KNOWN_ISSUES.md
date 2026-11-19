@@ -89,7 +89,8 @@ inputs move between environments (netcode, saved replays, desync checks).
 - **Snapshot coverage is only checked in debug.** `check_covered` asserts
   every non-empty storage is listed in `EntityState`; release builds skip it.
 - **EnTT is pinned to a master commit.** Exact restore depends on how its
-  snapshots and storages behave (see PORT_TO_ENTT.md). Updating means
+  snapshots and storages behave (see the README's snapshot section and
+  ECS rules). Updating means
   re-checking that, and re-running the guarantee tests.
 - **Structural changes inside loops rely on a rule, not a check.** Systems
   create or destroy entities mid-loop only when none of the touched storages
@@ -110,9 +111,9 @@ inputs move between environments (netcode, saved replays, desync checks).
   pointer).
 - **Single-threaded.** Biggest planned gain, with viewports. Separate sims
   (the real-time one, the demo's hologram) share nothing and can each get a
-  thread as is. Inside one sim, the deterministic parallel rules in
-  PORT_TO_ENTT.md apply (fixed chunks, per-chunk command buffers applied in
-  chunk order, ordered reductions).
+  thread as is. Inside one sim, the README's parallelism rules apply (fixed
+  chunks, per-chunk command buffers applied in chunk order, ordered
+  reductions).
 - **Everything is simulated and drawn everywhere.** The other big planned
   gain: viewports. Drawing only what a viewport sees is free; simulating
   only what's near one has to be decided by sim state (deterministic

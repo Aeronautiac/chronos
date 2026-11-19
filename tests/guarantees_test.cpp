@@ -1,4 +1,4 @@
-// The sim's hard guarantees (see PORT_TO_ENTT.md):
+// The sim's hard guarantees (see the README's requirements table):
 //   1. determinism: same start state + same inputs -> identical state
 //   2. exact restore: restoring a snapshot is indistinguishable from never
 //      having left it (entity ids, versions, free list, storage order)
