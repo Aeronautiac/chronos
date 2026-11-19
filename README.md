@@ -1,4 +1,4 @@
-# small-game
+# chronos
 
 A 2D movement and time-manipulation action game, built on a deterministic,
 rewindable simulation. This repo is the sim plus a throwaway raylib demo
