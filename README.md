@@ -1,8 +1,6 @@
 # chronos
 
-[Screencast_20261119_015505.webm](https://github.com/user-attachments/assets/38b4b43a-2b36-4e5e-b237-21655478437c)
-
-https://youtu.be/q96rlA2s6Hw
+[chronos_demo_trimmed.webm](https://github.com/user-attachments/assets/62001607-5399-42d4-bd0d-645936f54719)
 
 A 2D movement and time-manipulation action game, built on a deterministic,
 rewindable simulation. This repo is the sim plus a throwaway raylib demo
