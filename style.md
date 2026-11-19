@@ -92,20 +92,3 @@ Rules the compiler enforces don't depend on remembering them.
 **Architecture**
 
 - The simulation is its own library target that cannot include renderer, platform, input, or clock headers.
-
-## Skills That Make This Style Work
-
-- Profiling with `perf` or VTune. Measure, don't guess.
-- Reading assembly via Compiler Explorer.
-- Reasoning about caches, branch prediction, and memory layout.
-- Writing arenas, pools, and a lock-free SPSC ring buffer from scratch.
-- Knowing C++'s object lifetime and aliasing rules well enough to recognize when C-style code is actually undefined behavior.
-
-## Reading
-
-- Mike Acton, *Data-Oriented Design and C++* (CppCon 2014)
-- Ryan Fleury, *Untangling Lifetimes: The Arena Allocator*
-- Carl Cook, *When a Microsecond Is an Eternity* (CppCon 2017)
-- Richard Fabian, *Data-Oriented Design* (free online)
-- Martin Fowler, *The LMAX Architecture*
-- Orthodox C++ (Branimir Karadžić)
