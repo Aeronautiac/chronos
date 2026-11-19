@@ -562,7 +562,9 @@ int main(int argc, char **argv) {
   auto exec = [&](sim::SimInput input, sim::TimeInt dt) {
     const sim::TimeInt at = game->now();
     const sim::SimResult res = game->exec(input, dt);
-    if (ahead) {
+    // A rejected input changes nothing but time, and the hologram has had
+    // the same inputs up to `at`, so it would reject it too: leave it be.
+    if (ahead && res) {
       timed([&] {
         // back to the input's time, take it there, and catch up again
         move_hologram_to(at);
