@@ -1,5 +1,7 @@
 # chronos
 
+https://youtu.be/q96rlA2s6Hw
+
 A 2D movement and time-manipulation action game, built on a deterministic,
 rewindable simulation. This repo is the sim plus a throwaway raylib demo
 used for feel prototyping.
