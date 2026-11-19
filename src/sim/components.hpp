@@ -82,12 +82,6 @@ enum class MovementIntent : uint8_t {
   Jump = 1 << 2,
   Sprint = 1 << 3,
   Slide = 1 << 4,
-  // fire the hook toward Movement::aim, hold to keep it out
-  Hook = 1 << 5,
-  // slash toward Movement::aim
-  Attack = 1 << 6,
-  // gas burst toward Movement::aim
-  Burst = 1 << 7,
 };
 using MovementIntents = uint8_t;
 
@@ -108,8 +102,7 @@ struct Movement {
   MovementIntents prev_intents;
   Flags<MoveFlag> flags;
   MoveFsm state;
-  // unit vector the entity is aiming (gas bursts and the hook go this way),
-  // or zero
+  // unit vector the entity is aiming (wall jumps go this way), or zero
   Vec2 aim;
   // -1 or 1: last direction walked
   float facing;
@@ -147,7 +140,8 @@ enum class OdmFlag : uint8_t {
 };
 
 // The gear: a hook and a gas tank (see systems/odm). Driven by the
-// creature's Movement intents and aim, tuned by its MovementParams.
+// GasBurst, FireHook and ReleaseHook inputs, tuned by the creature's
+// MovementParams.
 struct Odm {
   // the hook while it's out, null once it's back
   entt::entity hook = entt::null;

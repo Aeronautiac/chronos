@@ -1,6 +1,5 @@
 #include "combat.hpp"
 #include "sim/spatial.hpp"
-#include "sim/systems/movement/movement.hpp"
 #include <algorithm>
 #include <cassert>
 
@@ -19,33 +18,33 @@ bool already_hit(const Combat &cb, entt::entity e) noexcept {
 
 } // namespace
 
+SimResult slash(entt::registry &r, entt::entity e, Vec2 aim) noexcept {
+  if (!r.valid(e) || !r.all_of<Combat, Movement>(e)) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  Combat &cb = r.get<Combat>(e);
+  if (cb.slash_cooldown_left > 0) {
+    return std::unexpected(SimErr::OnCooldown);
+  }
+  const Movement &m = r.get<Movement>(e);
+  cb.slash_dir = aim;
+  if (aim.x == 0 && aim.y == 0) {
+    cb.slash_dir = {m.facing, 0};
+  }
+  cb.slash_left = m.params.slash_time;
+  // counted from the start, so it runs out slash_cooldown after the slash
+  // does
+  cb.slash_cooldown_left = m.params.slash_time + m.params.slash_cooldown;
+  cb.slash_hit_count = 0;
+  return std::monostate{};
+}
+
 void run_combat(World &world, TimeFloat dt) noexcept {
   entt::registry &r = world.reg;
 
-  // timers, and starting slashes
-  for (auto [e, cb, m] : r.view<Combat, const Movement>().each()) {
-    const MovementParams &mp = m.params;
-    cb.slash_left = std::max(0.0f, cb.slash_left - dt);
-    cb.slash_cooldown_left = std::max(0.0f, cb.slash_cooldown_left - dt);
-    cb.since_hit += dt;
-
-    const MovementIntents pressed =
-        static_cast<MovementIntents>(m.intents & ~m.prev_intents);
-    if (has_intent(pressed, MovementIntent::Attack) &&
-        cb.slash_cooldown_left <= 0) {
-      cb.slash_dir = m.aim;
-      if (cb.slash_dir.x == 0 && cb.slash_dir.y == 0) {
-        cb.slash_dir = {m.facing, 0};
-      }
-      cb.slash_left = mp.slash_time;
-      // counted from the start, so it runs out slash_cooldown after the
-      // slash does
-      cb.slash_cooldown_left = mp.slash_time + mp.slash_cooldown;
-      cb.slash_hit_count = 0;
-    }
-  }
-
-  // slashes in progress hit whoever they touch, once each
+  // slashes in progress hit whoever they touch, once each. Before the
+  // timers count down, so a slash started since the last tick hits on this
+  // one.
   auto slashers = r.view<Combat, const Transform, const Movement>();
   for (auto [e, cb, t, m] : slashers.each()) {
     if (cb.slash_left <= 0) {
@@ -67,6 +66,12 @@ void run_combat(World &world, TimeFloat dt) noexcept {
       other_cb.health -= mp.slash_damage;
       other_cb.since_hit = 0;
     });
+  }
+
+  for (auto [e, cb] : r.view<Combat>().each()) {
+    cb.slash_left = std::max(0.0f, cb.slash_left - dt);
+    cb.slash_cooldown_left = std::max(0.0f, cb.slash_cooldown_left - dt);
+    cb.since_hit += dt;
   }
 
   // the dead, destroyed after the loop (never while iterating a view over

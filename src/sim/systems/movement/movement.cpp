@@ -158,6 +158,27 @@ void add_movement(entt::registry &reg, entt::entity e) noexcept {
   reg.emplace<Movement>(e, m);
 }
 
+SimResult set_movement_intents(entt::registry &reg, entt::entity e,
+                               MovementIntents intents, Vec2 aim) noexcept {
+  Movement *m = reg.valid(e) ? reg.try_get<Movement>(e) : nullptr;
+  if (!m) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  m->intents = intents;
+  m->aim = aim;
+  return std::monostate{};
+}
+
+SimResult set_movement_params(entt::registry &reg, entt::entity e,
+                              const MovementParams &params) noexcept {
+  Movement *m = reg.valid(e) ? reg.try_get<Movement>(e) : nullptr;
+  if (!m) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  m->params = params;
+  return std::monostate{};
+}
+
 void run_movement(World &world, TimeFloat dt) noexcept {
   const Grid &grid = *world.grid;
   auto view = world.reg.view<Movement, Physics, const Transform>();

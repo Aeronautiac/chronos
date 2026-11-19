@@ -5,7 +5,8 @@ Open problems, grouped by area. Fix or delete entries as they're dealt with.
 ## Inputs and the timeline
 
 - **No stable references in inputs.** Inputs target entities by raw
-  `entt::entity` (`SetMovementIntents`, `SetMovementParams`, `LookAt`).
+  `entt::entity` (`SetMovementIntents`, the actions, `SetMovementParams`,
+  `LookAt`).
   Inserting an input into the past (`Timeline::insert`) can change which ids
   later spawns get, so logged inputs after it can end up pointing at a
   different entity, or a dead one, after the re-simulation. Deterministic,

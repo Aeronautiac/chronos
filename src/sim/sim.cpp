@@ -47,35 +47,33 @@ TimeInt Sim::tick_dur() const {
 SimResult Sim::apply(SimInput input) {
   return std::visit(
       overloaded{
-          [this](SetMap set_map) -> SimResult {
-            if (!set_map.map) {
-              return std::unexpected(SimErr::InvalidMap);
-            }
-            world_.grid = set_map.map;
-            return std::monostate{};
+          [this](SetMap set) -> SimResult {
+            return set_map(world_, set.map);
           },
           [this](SpawnCreature spawn) -> SimResult {
             return spawn_creature(world_, spawn.pos);
           },
-          [this](SetMovementIntents set_mvmt_intent) -> SimResult {
-            auto *m = world_.reg.try_get<Movement>(set_mvmt_intent.target);
-            if (!m) {
-              return std::unexpected(SimErr::InvalidEntity);
-            }
-            m->intents = set_mvmt_intent.intents;
-            m->aim = set_mvmt_intent.aim;
-            return std::monostate{};
+          [this](SetMovementIntents set) -> SimResult {
+            return set_movement_intents(world_.reg, set.target, set.intents,
+                                        set.aim);
+          },
+          [this](GasBurst burst) -> SimResult {
+            return gas_burst(world_.reg, burst.target, burst.aim);
+          },
+          [this](FireHook fire) -> SimResult {
+            return fire_hook(world_.reg, fire.target, fire.aim);
+          },
+          [this](ReleaseHook release) -> SimResult {
+            return release_hook(world_.reg, release.target);
+          },
+          [this](Slash s) -> SimResult {
+            return slash(world_.reg, s.target, s.aim);
           },
           [](LookAt) -> SimResult {
             return std::unexpected(SimErr::InvalidEntity);
           },
-          [this](SetMovementParams set_params) -> SimResult {
-            auto *m = world_.reg.try_get<Movement>(set_params.target);
-            if (!m) {
-              return std::unexpected(SimErr::InvalidEntity);
-            }
-            m->params = set_params.params;
-            return std::monostate{};
+          [this](SetMovementParams set) -> SimResult {
+            return set_movement_params(world_.reg, set.target, set.params);
           },
       },
       input);

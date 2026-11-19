@@ -1,6 +1,5 @@
 #include "odm.hpp"
 #include "sim/spatial.hpp"
-#include "sim/systems/movement/movement.hpp"
 #include <cassert>
 #include <cmath>
 
@@ -15,9 +14,7 @@ constexpr float HOOK_SIZE = 4;
 
 float length(Vec2 v) noexcept { return std::sqrt(v.x * v.x + v.y * v.y); }
 
-MovementIntents pressed_intents(const Movement &m) noexcept {
-  return static_cast<MovementIntents>(m.intents & ~m.prev_intents);
-}
+bool is_zero(Vec2 v) noexcept { return v.x == 0 && v.y == 0; }
 
 //====== HOOK ======//
 
@@ -55,63 +52,6 @@ void attach(entt::registry &r, Hook &hook, Physics &p, entt::entity owner,
                            ForceModifier{.target = owner, .force = {0, 0}});
 }
 
-// A hook to create, queued while iterating Odm.
-struct FireHook {
-  entt::entity owner;
-  Vec2 pos;
-  Vec2 vel;
-};
-
-// A fresh press of the hook button, with no hook out, fires one along the
-// aim.
-void fire_hooks(World &world) noexcept {
-  entt::registry &r = world.reg;
-  ArenaScope scope{world.scratch};
-  // at most one per Odm
-  auto fire_mem = world.scratch.vec<FireHook>(
-      static_cast<uint32_t>(r.storage<Odm>().size()));
-  assert(fire_mem);
-  ArenaVec<FireHook> fire = *fire_mem;
-
-  auto odms = r.view<const Odm, const Movement, const Transform>();
-  for (auto [e, odm, m, t] : odms.each()) {
-    if (!has_intent(pressed_intents(m), MovementIntent::Hook)) {
-      continue;
-    }
-    // only one out at a time; it has to come back first
-    if (r.valid(odm.hook)) {
-      continue;
-    }
-    if (m.aim.x == 0 && m.aim.y == 0) {
-      continue;
-    }
-    (void)fire.push(FireHook{
-        .owner = e,
-        .pos = t.pos,
-        .vel = m.aim * m.params.hook_speed,
-    });
-  }
-
-  // after the loop: emplacing Transform while iterating a view over it
-  // isn't allowed
-  for (const FireHook &f : fire) {
-    const entt::entity hook = r.create();
-    r.emplace<Owner>(hook, Owner{.entity = f.owner});
-    r.emplace<Transform>(hook, Transform{.pos = f.pos, .rot = 0});
-    Physics p{};
-    p.raw_vel = f.vel;
-    p.collider = {.w = HOOK_SIZE, .h = HOOK_SIZE};
-    p.flags.mask = bits(PhysicsFlag::Collides);
-    r.emplace<Physics>(hook, p);
-    r.emplace<Hook>(hook, Hook{
-                              .state = HookState::Flying,
-                              .pull = entt::null,
-                              .stuck_to = entt::null,
-                          });
-    r.get<Odm>(f.owner).hook = hook;
-  }
-}
-
 // Every hook out in the world: sticks, pulls, comes back.
 void update_hooks(World &world) noexcept {
   entt::registry &r = world.reg;
@@ -137,14 +77,13 @@ void update_hooks(World &world) noexcept {
     }
     const MovementParams &mp = m->params;
     const Vec2 owner_pos = owner_t->pos;
-    const bool held = has_intent(m->intents, MovementIntent::Hook);
 
     switch (hook.state) {
     case HookState::Flying: {
       // creatures (things with Combat) other than the owner
       const entt::entity hit = first_overlapping<Combat>(
           r, collider_box(pos, p.collider), owner.entity);
-      if (!held || length(pos - owner_pos) > mp.hook_max_length) {
+      if (length(pos - owner_pos) > mp.hook_max_length) {
         start_returning(r, hook, p);
       } else if (hit != entt::null) {
         attach(r, hook, p, owner.entity, hit);
@@ -155,10 +94,6 @@ void update_hooks(World &world) noexcept {
     }
 
     case HookState::Attached: {
-      if (!held) {
-        start_returning(r, hook, p);
-        break;
-      }
       // stuck in a creature: ride along with it
       if (hook.stuck_to != entt::null) {
         const Transform *target = r.try_get<Transform>(hook.stuck_to);
@@ -203,10 +138,10 @@ void update_hooks(World &world) noexcept {
 
 //====== GAS ======//
 
-void run_gas(entt::registry &r, TimeFloat dt) noexcept {
-  for (auto [e, odm, m, p] : r.view<Odm, const Movement, Physics>().each()) {
+// Charges come back one at a time, anywhere.
+void regen_gas(entt::registry &r, TimeFloat dt) noexcept {
+  for (auto [e, odm, m] : r.view<Odm, const Movement>().each()) {
     const MovementParams &mp = m.params;
-    // charges come back one at a time, anywhere
     if (odm.burst_charges < static_cast<uint8_t>(mp.burst_charges)) {
       odm.burst_regen_left -= dt;
       if (odm.burst_regen_left <= 0) {
@@ -216,26 +151,82 @@ void run_gas(entt::registry &r, TimeFloat dt) noexcept {
     } else {
       odm.burst_regen_left = mp.burst_regen_time;
     }
-
-    // a press, with a charge, is an impulse toward the aim
-    if (has_intent(pressed_intents(m), MovementIntent::Burst) &&
-        odm.burst_charges > 0 && (m.aim.x != 0 || m.aim.y != 0)) {
-      p.raw_vel += m.aim * mp.burst_speed;
-      odm.burst_charges -= 1;
-    }
   }
 }
 
 } // namespace
+
+//====== ACTIONS ======//
+
+SimResult gas_burst(entt::registry &r, entt::entity e, Vec2 aim) noexcept {
+  if (!r.valid(e) || !r.all_of<Odm, Movement, Physics>(e)) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  if (is_zero(aim)) {
+    return std::unexpected(SimErr::NoAim);
+  }
+  Odm &odm = r.get<Odm>(e);
+  if (odm.burst_charges == 0) {
+    return std::unexpected(SimErr::NoGas);
+  }
+  r.get<Physics>(e).raw_vel += aim * r.get<Movement>(e).params.burst_speed;
+  odm.burst_charges -= 1;
+  return std::monostate{};
+}
+
+SimResult fire_hook(entt::registry &r, entt::entity e, Vec2 aim) noexcept {
+  if (!r.valid(e) || !r.all_of<Odm, Movement, Transform>(e)) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  if (is_zero(aim)) {
+    return std::unexpected(SimErr::NoAim);
+  }
+  // only one out at a time; it has to come back first
+  if (r.valid(r.get<Odm>(e).hook)) {
+    return std::unexpected(SimErr::HookOut);
+  }
+
+  // copied out first: emplacing below can move the storages they live in
+  const Vec2 pos = r.get<Transform>(e).pos;
+  const Vec2 vel = aim * r.get<Movement>(e).params.hook_speed;
+  const entt::entity hook = r.create();
+  r.emplace<Owner>(hook, Owner{.entity = e});
+  r.emplace<Transform>(hook, Transform{.pos = pos, .rot = 0});
+  Physics p{};
+  p.raw_vel = vel;
+  p.collider = {.w = HOOK_SIZE, .h = HOOK_SIZE};
+  p.flags.mask = bits(PhysicsFlag::Collides);
+  r.emplace<Physics>(hook, p);
+  r.emplace<Hook>(hook, Hook{
+                            .state = HookState::Flying,
+                            .pull = entt::null,
+                            .stuck_to = entt::null,
+                        });
+  r.get<Odm>(e).hook = hook;
+  return hook;
+}
+
+SimResult release_hook(entt::registry &r, entt::entity e) noexcept {
+  if (!r.valid(e) || !r.all_of<Odm>(e)) {
+    return std::unexpected(SimErr::InvalidEntity);
+  }
+  const entt::entity hook = r.get<Odm>(e).hook;
+  if (!r.valid(hook) || r.get<Hook>(hook).state == HookState::Returning) {
+    return std::unexpected(SimErr::NoHook);
+  }
+  start_returning(r, r.get<Hook>(hook), r.get<Physics>(hook));
+  return std::monostate{};
+}
+
+//====== TICK ======//
 
 void run_odm(World &world, TimeFloat dt) noexcept {
   // set again by update_hooks for every ODM whose hook is pulling this tick
   for (auto [e, odm] : world.reg.view<Odm>().each()) {
     odm.flags.set(OdmFlag::HookPulling, false);
   }
-  fire_hooks(world);
   update_hooks(world);
-  run_gas(world.reg, dt);
+  regen_gas(world.reg, dt);
 }
 
 } // namespace sim

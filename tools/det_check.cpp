@@ -93,19 +93,27 @@ void check_sim() {
     if (t % 97 == 0) {
       (void)s->exec(sim::SpawnCreature{.pos = pos(t % n)}, STEP);
     } else {
+      // each creature gets one input per round: an action, or what it holds
       const int round = t / n;
-      sim::MovementIntents in = 0;
-      if (round % 2 == 1) in |= bit(MovementIntent::Attack);
-      if ((round / 10) % 2 == 0) in |= bit(MovementIntent::Hook);
-      if (round % 15 == 0) in |= bit(MovementIntent::Jump);
-      if (round % 7 == 3) in |= bit(MovementIntent::Burst);
-      in |= bit((round / 20) % 2 == 0 ? MovementIntent::Right
-                                      : MovementIntent::Left);
+      const entt::entity target = ids[static_cast<size_t>(t % n)];
       const Vec2 aim = (round / 10) % 3 == 0 ? Vec2{0.6f, -0.8f} : Vec2{1, 0};
-      (void)s->exec(sim::SetMovementIntents{.intents = in,
-                                            .aim = aim,
-                                            .target = ids[static_cast<size_t>(t % n)]},
-                    STEP);
+      sim::SimInput input;
+      if (round % 7 == 3) {
+        input = sim::GasBurst{.aim = aim, .target = target};
+      } else if (round % 20 == 0) {
+        input = sim::FireHook{.aim = aim, .target = target};
+      } else if (round % 20 == 10) {
+        input = sim::ReleaseHook{.target = target};
+      } else if (round % 2 == 1) {
+        input = sim::Slash{.aim = aim, .target = target};
+      } else {
+        sim::MovementIntents in = bit((round / 20) % 2 == 0
+                                          ? MovementIntent::Right
+                                          : MovementIntent::Left);
+        if (round % 15 == 0) in |= bit(MovementIntent::Jump);
+        input = sim::SetMovementIntents{.intents = in, .aim = aim, .target = target};
+      }
+      (void)s->exec(input, STEP);
     }
     if ((t + 1) % 500 == 0) {
       std::printf("sim step %4d %016llx\n", t + 1,

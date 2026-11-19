@@ -6,6 +6,14 @@ namespace sim {
 
 World::World() noexcept { EntityState::reserve(reg, ENTITY_RESERVE); }
 
+SimResult set_map(World &world, const Grid *map) noexcept {
+  if (!map) {
+    return std::unexpected(SimErr::InvalidMap);
+  }
+  world.grid = map;
+  return std::monostate{};
+}
+
 entt::entity spawn_creature(World &world, Vec2 pos) noexcept {
   entt::registry &r = world.reg;
   const entt::entity e = r.create();

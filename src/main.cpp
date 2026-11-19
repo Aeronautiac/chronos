@@ -24,13 +24,6 @@ static sim::MovementIntents read_intents() {
   bind(KEY_SPACE, sim::MovementIntent::Jump);
   bind(KEY_LEFT_SHIFT, sim::MovementIntent::Sprint);
   bind(KEY_LEFT_CONTROL, sim::MovementIntent::Slide);
-  bind(KEY_Q, sim::MovementIntent::Burst);
-  if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-    intents |= static_cast<sim::MovementIntents>(sim::MovementIntent::Hook);
-  }
-  if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-    intents |= static_cast<sim::MovementIntents>(sim::MovementIntent::Attack);
-  }
   return intents;
 }
 
@@ -701,16 +694,34 @@ int main(int argc, char **argv) {
       assert(set);
     }
 
+    // aimed through last frame's camera, from where the player was drawn
+    const Vec2 aim = read_aim(camera, player_drawn);
+
+    // Actions, one input per press (or release), before this frame's time
+    // passes. The sim checks each one; a rejected one (no gas, hook already
+    // out, on cooldown) changes nothing, so the hologram is left alone.
+    if (IsKeyPressed(KEY_Q)) {
+      (void)exec(sim::GasBurst{.aim = aim, .target = player}, 0);
+    }
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+      (void)exec(sim::FireHook{.aim = aim, .target = player}, 0);
+    }
+    if (IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) {
+      (void)exec(sim::ReleaseHook{.target = player}, 0);
+    }
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      (void)exec(sim::Slash{.aim = aim, .target = player}, 0);
+    }
+
     // Movement input only when the intents change: every input rolls the
-    // hologram back to the present. Aim goes along with it, aimed through last frame's
-    // camera from where the player was drawn. The sim only reads aim on a
-    // press (hook, burst, slash, wall jump), and a press is an intent
-    // change, so aim still arrives exactly when it's used.
+    // hologram back to the present. Aim goes along with it: the sim only
+    // reads it on a (buffered) jump press, which is an intent change, so
+    // it arrives exactly when it's used.
     const sim::MovementIntents intents = read_intents();
     if (intents != sent_intents) {
       sim::SimResult res =
           exec(sim::SetMovementIntents{.intents = intents,
-                                       .aim = read_aim(camera, player_drawn),
+                                       .aim = aim,
                                        .target = player},
                sim_dt);
       assert(res);

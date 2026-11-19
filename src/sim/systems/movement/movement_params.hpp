@@ -92,15 +92,15 @@ struct MovementParams {
   float wall_jump_speed = 550;
   float wall_jump_cone = 75;
 
-  // gas burst (press burst, anywhere): adds burst_speed toward the aim. Up
-  // to burst_charges of
-  // them; one comes back every burst_regen_time seconds, anywhere. (A count,
-  // kept as a float like everything else here; whole numbers.)
+  // gas burst (GasBurst input, anywhere): adds burst_speed toward the aim.
+  // Up to burst_charges of them; one comes back every burst_regen_time
+  // seconds, anywhere. (A count, kept as a float like everything else here;
+  // whole numbers.)
   float burst_speed = 600;
   float burst_charges = 2;
   float burst_regen_time = 2.5f;
 
-  // hook (press to fire toward the aim, hold to keep it out). Flies at
+  // hook (FireHook toward the aim, ReleaseHook to let go). Flies at
   // hook_speed and sticks to the first terrain or creature it hits (and
   // follows a creature); if it gets hook_max_length away first, it comes
   // back. Stuck, it's an elastic rope: a force toward the hook of
@@ -116,7 +116,7 @@ struct MovementParams {
   float hook_stiffness = 13;
   float hook_return_speed = 1200;
 
-  // slash (left click, toward the aim). For slash_time a slash_reach box
+  // slash (Slash input, toward the aim). For slash_time a slash_reach box
   // reaching out in front hits each creature it touches once for
   // slash_damage. Then can't slash again for slash_cooldown. (Here until
   // combat has its own params.)

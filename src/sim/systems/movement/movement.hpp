@@ -14,6 +14,16 @@ constexpr bool has_intent(MovementIntents set, MovementIntent i) noexcept {
 // DriveModifier.
 void add_movement(entt::registry &reg, entt::entity e) noexcept;
 
+// The SetMovementIntents input: what the entity holds from now on, and its
+// aim. Rejected if it has no Movement.
+SimResult set_movement_intents(entt::registry &reg, entt::entity e,
+                               MovementIntents intents, Vec2 aim) noexcept;
+
+// The SetMovementParams input: replaces the entity's movement tunables.
+// Rejected if it has no Movement.
+SimResult set_movement_params(entt::registry &reg, entt::entity e,
+                              const MovementParams &params) noexcept;
+
 // Runs over entities with Movement, Physics and Transform. Run after the
 // ODM system (reads this tick's Odm HookPulling flag) and before physics.
 // Finds ground and walls itself (box casts), retunes each entity's drive,

@@ -184,27 +184,30 @@ std::vector<Step> make_log(std::span<const entt::entity> ids, int steps) {
                      STEP});
       continue;
     }
+    // each creature gets one input per round: an action, or what it holds
     const int round = t / n;
-    sim::MovementIntents in = 0;
-    if (round % 2 == 1) {
-      in |= intents({MovementIntent::Attack});
-    }
-    if ((round / 10) % 2 == 0) {
-      in |= intents({MovementIntent::Hook});
-    }
-    in |= intents({(round / 20) % 2 == 0 ? MovementIntent::Right
-                                         : MovementIntent::Left});
-    if (round % 15 == 0) {
-      in |= intents({MovementIntent::Jump});
-    }
-    if (round % 7 == 3) {
-      in |= intents({MovementIntent::Burst});
-    }
+    const entt::entity target = ids[static_cast<size_t>(t % n)];
     const Vec2 aim = (round / 10) % 3 == 0 ? Vec2{0.6f, -0.8f} : Vec2{1, 0};
-    log.push_back({sim::SetMovementIntents{.intents = in,
-                                           .aim = aim,
-                                           .target = ids[static_cast<size_t>(t % n)]},
-                   STEP});
+    if (round % 7 == 3) {
+      log.push_back({sim::GasBurst{.aim = aim, .target = target}, STEP});
+    } else if (round % 20 == 0) {
+      log.push_back({sim::FireHook{.aim = aim, .target = target}, STEP});
+    } else if (round % 20 == 10) {
+      log.push_back({sim::ReleaseHook{.target = target}, STEP});
+    } else if (round % 2 == 1) {
+      log.push_back({sim::Slash{.aim = aim, .target = target}, STEP});
+    } else {
+      sim::MovementIntents in = intents({(round / 20) % 2 == 0
+                                             ? MovementIntent::Right
+                                             : MovementIntent::Left});
+      if (round % 15 == 0) {
+        in |= intents({MovementIntent::Jump});
+      }
+      log.push_back({sim::SetMovementIntents{.intents = in,
+                                             .aim = aim,
+                                             .target = target},
+                     STEP});
+    }
   }
   return log;
 }
@@ -335,6 +338,24 @@ TEST(Guarantees, RejectedInputsOnlyPassTime) {
   auto s = make_sim();
   const auto ids = spawn_creatures(*s);
   (void)run(*s, make_log(ids, 300));
+  // Two fresh creatures, so the actions below are rejected for what state
+  // they're in, not for being dead. `busy` has used up its gas, has its
+  // hook out and just slashed; `idle` has no hook out.
+  const auto spawn = [&] {
+    return std::get<entt::entity>(
+        *s->exec(sim::SpawnCreature{.pos = creature_pos(0)}, 0));
+  };
+  const entt::entity busy = spawn();
+  const entt::entity idle = spawn();
+  const Vec2 right{1, 0};
+  // all its gas (no time passes, so none comes back)
+  const auto charges = static_cast<int>(sim::MovementParams{}.burst_charges);
+  for (int i = 0; i < charges; i++) {
+    ASSERT_TRUE(s->exec(sim::GasBurst{.aim = right, .target = busy}, 0));
+  }
+  ASSERT_TRUE(s->exec(sim::FireHook{.aim = right, .target = busy}, 0));
+  ASSERT_TRUE(s->exec(sim::Slash{.aim = right, .target = busy}, 0));
+
   const sim::Snapshot before = s->save();
   auto just_time = make_sim();
   just_time->restore(before);
@@ -344,6 +365,12 @@ TEST(Guarantees, RejectedInputsOnlyPassTime) {
       sim::SetMovementParams{.params = {}, .target = entt::null},
       sim::LookAt{.pos = {}, .target = ids[0]},
       sim::SetMap{.map = nullptr},
+      sim::GasBurst{.aim = right, .target = busy},
+      sim::GasBurst{.aim = {}, .target = idle},
+      sim::FireHook{.aim = right, .target = busy},
+      sim::FireHook{.aim = {}, .target = idle},
+      sim::ReleaseHook{.target = idle},
+      sim::Slash{.aim = right, .target = busy},
   };
   for (const sim::SimInput &in : rejected) {
     ASSERT_FALSE(s->exec(in, STEP));

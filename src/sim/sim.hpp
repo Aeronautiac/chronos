@@ -27,8 +27,19 @@ using TimeFloat = float;
 // Why an input was rejected. A rejected input changes nothing; time still
 // passes (see Sim::exec).
 enum class SimErr {
+  // the target is gone, or doesn't have what the input acts on
   InvalidEntity,
   InvalidMap,
+  // an action that needs a direction got a zero aim
+  NoAim,
+  // a gas burst with no charges left
+  NoGas,
+  // firing the hook while it's still out (flying, stuck or coming back)
+  HookOut,
+  // letting go of a hook that isn't out, or is already coming back
+  NoHook,
+  // an action that's still on cooldown
+  OnCooldown,
 };
 
 // returns nothing (monostate). Switches the map (World::grid) to `map`,
@@ -43,11 +54,42 @@ struct SpawnCreature {
   Vec2 pos;
 };
 
-// returns nothing (monostate)
+// returns nothing (monostate). What the entity is holding (walk, jump,
+// sprint, slide); movement acts on it every tick.
 struct SetMovementIntents {
   MovementIntents intents;
-  // unit vector the entity aims along (hook, gas bursts, slashes, wall
-  // jumps), or zero
+  // unit vector the entity aims along (wall jumps), or zero
+  Vec2 aim;
+  entt::entity target;
+};
+
+// Actions: each dispatches to its system's action function, which checks
+// the action can happen right now and either does it or rejects it,
+// changing nothing. `aim` is a unit vector.
+
+// returns nothing (monostate). An impulse along `aim`, using up a gas
+// charge (see systems/odm). Rejected with no charge left or a zero aim.
+struct GasBurst {
+  Vec2 aim;
+  entt::entity target;
+};
+
+// returns the hook's entity. Fires the target's hook along `aim` (see
+// systems/odm). Rejected while its hook is out or with a zero aim.
+struct FireHook {
+  Vec2 aim;
+  entt::entity target;
+};
+
+// returns nothing (monostate). Lets go of the target's hook: it comes back.
+// Rejected if no hook is out or it's already coming back.
+struct ReleaseHook {
+  entt::entity target;
+};
+
+// returns nothing (monostate). Starts a slash along `aim`, or the facing
+// direction with a zero aim (see systems/combat). Rejected on cooldown.
+struct Slash {
   Vec2 aim;
   entt::entity target;
 };
@@ -64,8 +106,9 @@ struct SetMovementParams {
   entt::entity target;
 };
 
-using SimInput = std::variant<SetMap, SpawnCreature, SetMovementIntents,
-                              LookAt, SetMovementParams>;
+using SimInput =
+    std::variant<SetMap, SpawnCreature, SetMovementIntents, GasBurst,
+                 FireHook, ReleaseHook, Slash, LookAt, SetMovementParams>;
 using SimOutput = std::variant<std::monostate, entt::entity>;
 using SimResult = std::expected<SimOutput, SimErr>;
 

@@ -81,8 +81,18 @@ Related docs: `KNOWN_ISSUES.md` (open problems), `style.md` (code style).
 - `restore(snapshot)`: replaces the whole state (used by the timeline).
 
 Anything that affects the sim is a `SimInput` (`SetMap`, `SpawnCreature`,
-`SetMovementIntents`, `SetMovementParams`, `LookAt`), so a log of inputs
-reproduces everything. Even switching maps is an input.
+`SetMovementIntents`, `GasBurst`, `FireHook`, `ReleaseHook`, `Slash`,
+`SetMovementParams`, `LookAt`), so a log of inputs reproduces everything.
+Even switching maps is an input.
+
+`SetMovementIntents` is what a creature holds (walk, jump, sprint, slide),
+which movement acts on every tick. Actions (gas bursts, the hook, slashes)
+are inputs of their own. `apply` holds no game logic for them: each one
+dispatches to an action function in its system (`gas_burst`, `fire_hook`
+and `release_hook` in `systems/odm`, `slash` in `systems/combat`), which
+checks the action against the state right then (gas left, hook out,
+cooldown) and either does it or rejects it, so an action that can't happen
+changes nothing.
 
 ### Time
 
