@@ -97,10 +97,7 @@ changes nothing.
 Ticks are adaptive. `tick_dur()` is worked out again before every tick, from
 the state:
 
-- 240 Hz (`BASE_TICK`) while anything moves or anyone holds an input, 30 Hz
-  (`IDLE_TICK`) while nothing does, so a still world costs little. An input
-  isn't delayed by this: it changes the state at once, so the very next tick
-  is a short one.
+- Tick size is dynamic based on simulation state. If an entity has high perception, or something is moving very fast, the tick duration will shorten. If not much is happening, it will widen.
 - Shorter still so the fastest body moves at most `TICK_MAX_TRAVEL` per
   tick, and divided by the highest perception (high perception slows the
   world).
